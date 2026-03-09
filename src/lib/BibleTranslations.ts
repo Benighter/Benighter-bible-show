@@ -1,7 +1,11 @@
+import type { VerseSegment } from './Broadcast';
+
 export interface SlideItem {
     id: string;
     ref: string;
     text: string;
+    segments?: VerseSegment[];
+    translationShortName?: string;
 }
 
 export interface BibleTranslation {
@@ -10,6 +14,40 @@ export interface BibleTranslation {
     shortName: string;
     verses: SlideItem[];
     sourceFileName?: string;
+}
+
+function decodeHtmlEntities(value: string) {
+    if (typeof document !== 'undefined') {
+        const textarea = document.createElement('textarea');
+        textarea.innerHTML = value;
+        return textarea.value;
+    }
+
+    return value
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>');
+}
+
+export function sanitizeVerseText(value: string) {
+    return decodeHtmlEntities(value)
+        .replace(/<[^>]+>/g, '')
+        .replace(/\*/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+export function sanitizeTranslation(translation: BibleTranslation): BibleTranslation {
+    return {
+        ...translation,
+        verses: translation.verses.map((verse) => ({
+            ...verse,
+            text: sanitizeVerseText(verse.text),
+        })),
+    };
 }
 
 type InfoRow = {
@@ -33,34 +71,34 @@ type BibleRow = {
 
 const CANONICAL_BOOKS = [
     ['Genesis', ['gen', 'ge', 'gn']],
-    ['Exodus', ['exo', 'ex', 'exod'] ],
-    ['Leviticus', ['lev', 'le', 'lv'] ],
-    ['Numbers', ['num', 'nu', 'nm', 'nb'] ],
-    ['Deuteronomy', ['deut', 'deu', 'dt'] ],
-    ['Joshua', ['josh', 'jos'] ],
-    ['Judges', ['judg', 'jdg', 'jg', 'jdgs'] ],
+    ['Exodus', ['exo', 'ex', 'exod']],
+    ['Leviticus', ['lev', 'le', 'lv']],
+    ['Numbers', ['num', 'nu', 'nm', 'nb']],
+    ['Deuteronomy', ['deut', 'deu', 'dt']],
+    ['Joshua', ['josh', 'jos'],],
+    ['Judges', ['judg', 'jdg', 'jg', 'jdgs']],
     ['Ruth', ['rth', 'ru'] ],
-    ['1 Samuel', ['1samuel', '1 samuel', '1sam', '1 sam', 'i samuel', 'i sam'] ],
-    ['2 Samuel', ['2samuel', '2 samuel', '2sam', '2 sam', 'ii samuel', 'ii sam'] ],
-    ['1 Kings', ['1kings', '1 kings', '1kgs', '1 kgs', 'i kings', 'i kgs'] ],
-    ['2 Kings', ['2kings', '2 kings', '2kgs', '2 kgs', 'ii kings', 'ii kgs'] ],
-    ['1 Chronicles', ['1chronicles', '1 chronicles', '1chr', '1 chr', 'i chronicles', 'i chr'] ],
-    ['2 Chronicles', ['2chronicles', '2 chronicles', '2chr', '2 chr', 'ii chronicles', 'ii chr'] ],
+    ['1 Samuel', ['1samuel', '1 samuel', '1sam', '1 sam', '1sa', '1 sa', 'i samuel', 'i sam', 'i sa'] ],
+    ['2 Samuel', ['2samuel', '2 samuel', '2sam', '2 sam', '2sa', '2 sa', 'ii samuel', 'ii sam', 'ii sa'] ],
+    ['1 Kings', ['1kings', '1 kings', '1kgs', '1 kgs', '1ki', '1 ki', 'i kings', 'i kgs', 'i ki'] ],
+    ['2 Kings', ['2kings', '2 kings', '2kgs', '2 kgs', '2ki', '2 ki', 'ii kings', 'ii kgs', 'ii ki'] ],
+    ['1 Chronicles', ['1chronicles', '1 chronicles', '1chr', '1 chr', '1ch', '1 ch', 'i chronicles', 'i chr', 'i ch'] ],
+    ['2 Chronicles', ['2chronicles', '2 chronicles', '2chr', '2 chr', '2ch', '2 ch', 'ii chronicles', 'ii chr', 'ii ch'] ],
     ['Ezra', ['ezr'] ],
     ['Nehemiah', ['neh', 'ne'] ],
     ['Esther', ['est', 'es'] ],
     ['Job', ['jb'] ],
-    ['Psalm', ['psalm', 'ps', 'psa', 'pslm'] ],
+    ['Psalm', ['psalm', 'psalms', 'ps', 'psa', 'pslm'] ],
     ['Proverbs', ['prov', 'pro', 'prv', 'pr'] ],
     ['Ecclesiastes', ['eccles', 'eccle', 'ecc', 'ec', 'qoh'] ],
-    ['Song of Solomon', ['song of songs', 'song', 'songs', 'sos', 'canticles'] ],
+    ['Song of Solomon', ['song of songs', 'song', 'songs', 'sos', 'so', 'canticles'] ],
     ['Isaiah', ['isa', 'is'] ],
     ['Jeremiah', ['jer', 'je', 'jr'] ],
     ['Lamentations', ['lam', 'la'] ],
     ['Ezekiel', ['ezek', 'eze', 'ezk'] ],
     ['Daniel', ['dan', 'da', 'dn'] ],
     ['Hosea', ['hos', 'ho'] ],
-    ['Joel', ['jl'] ],
+    ['Joel', ['jl', 'joe'] ],
     ['Amos', ['am'] ],
     ['Obadiah', ['obad', 'ob'] ],
     ['Jonah', ['jon', 'jnh'] ],
@@ -77,22 +115,22 @@ const CANONICAL_BOOKS = [
     ['John', ['jhn', 'jn', 'joh'] ],
     ['Acts', ['act', 'ac'] ],
     ['Romans', ['rom', 'ro', 'rm'] ],
-    ['1 Corinthians', ['1corinthians', '1 corinthians', '1cor', '1 cor', 'i corinthians', 'i cor'] ],
-    ['2 Corinthians', ['2corinthians', '2 corinthians', '2cor', '2 cor', 'ii corinthians', 'ii cor'] ],
+    ['1 Corinthians', ['1corinthians', '1 corinthians', '1cor', '1 cor', '1co', '1 co', 'i corinthians', 'i cor', 'i co'] ],
+    ['2 Corinthians', ['2corinthians', '2 corinthians', '2cor', '2 cor', '2co', '2 co', 'ii corinthians', 'ii cor', 'ii co'] ],
     ['Galatians', ['gal', 'ga'] ],
     ['Ephesians', ['eph', 'ep'] ],
     ['Philippians', ['phil', 'php', 'pp'] ],
     ['Colossians', ['col', 'co'] ],
-    ['1 Thessalonians', ['1thessalonians', '1 thessalonians', '1thess', '1 thess', 'i thessalonians', 'i thess'] ],
-    ['2 Thessalonians', ['2thessalonians', '2 thessalonians', '2thess', '2 thess', 'ii thessalonians', 'ii thess'] ],
-    ['1 Timothy', ['1timothy', '1 timothy', '1tim', '1 tim', 'i timothy', 'i tim'] ],
-    ['2 Timothy', ['2timothy', '2 timothy', '2tim', '2 tim', 'ii timothy', 'ii tim'] ],
+    ['1 Thessalonians', ['1thessalonians', '1 thessalonians', '1thess', '1 thess', '1th', '1 th', 'i thessalonians', 'i thess', 'i th'] ],
+    ['2 Thessalonians', ['2thessalonians', '2 thessalonians', '2thess', '2 thess', '2th', '2 th', 'ii thessalonians', 'ii thess', 'ii th'] ],
+    ['1 Timothy', ['1timothy', '1 timothy', '1tim', '1 tim', '1ti', '1 ti', 'i timothy', 'i tim', 'i ti'] ],
+    ['2 Timothy', ['2timothy', '2 timothy', '2tim', '2 tim', '2ti', '2 ti', 'ii timothy', 'ii tim', 'ii ti'] ],
     ['Titus', ['tit', 'ti'] ],
     ['Philemon', ['philem', 'phm', 'pm'] ],
     ['Hebrews', ['heb', 'he'] ],
     ['James', ['jas', 'jm'] ],
-    ['1 Peter', ['1peter', '1 peter', '1pet', '1 pet', 'i peter', 'i pet'] ],
-    ['2 Peter', ['2peter', '2 peter', '2pet', '2 pet', 'ii peter', 'ii pet'] ],
+    ['1 Peter', ['1peter', '1 peter', '1pet', '1 pet', '1pe', '1 pe', 'i peter', 'i pet', 'i pe'] ],
+    ['2 Peter', ['2peter', '2 peter', '2pet', '2 pet', '2pe', '2 pe', 'ii peter', 'ii pet', 'ii pe'] ],
     ['1 John', ['1john', '1 john', '1jn', '1 jn', 'i john', 'i jn'] ],
     ['2 John', ['2john', '2 john', '2jn', '2 jn', 'ii john', 'ii jn'] ],
     ['3 John', ['3john', '3 john', '3jn', '3 jn', 'iii john', 'iii jn'] ],
@@ -120,7 +158,7 @@ function slugify(value: string) {
         .replace(/^-+|-+$/g, '');
 }
 
-function canonicalizeBookName(rawBook: string) {
+export function canonicalizeBookName(rawBook: string) {
     return BOOK_ALIAS_LOOKUP.get(normalizeBookKey(rawBook)) ?? rawBook.trim();
 }
 
@@ -231,13 +269,13 @@ function buildTranslation(fileName: string, verses: SlideItem[], metadata?: { na
     const name = metadata?.name?.trim() || baseName;
     const shortName = metadata?.shortName?.trim() || baseName;
 
-    return {
+    return sanitizeTranslation({
         id: slugify(baseName) || `translation-${Date.now()}`,
         name,
         shortName,
         verses,
         sourceFileName: fileName,
-    } satisfies BibleTranslation;
+    } satisfies BibleTranslation);
 }
 
 function parseTextBibleTranslation(content: string, fileName = 'translation.bib') {

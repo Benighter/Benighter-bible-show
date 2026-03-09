@@ -1,11 +1,66 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createProjectorPresenceBroadcaster, createReceiver, type PresentationState } from './lib/Broadcast';
 import './index.css';
 
 export default function ProjectorView() {
     const [state, setState] = useState<PresentationState>({ type: 'clear', text: '' });
+    const frameRef = useRef<HTMLDivElement | null>(null);
+    const contentRef = useRef<HTMLDivElement | null>(null);
+    const [textSize, setTextSize] = useState(96);
+    const [referenceSize, setReferenceSize] = useState(38);
+    const projectorStyle = {
+        '--projector-text-size': `${textSize}px`,
+        '--projector-reference-size': `${referenceSize}px`,
+    } as CSSProperties;
 
     const requestFullscreen = () => document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => undefined);
+
+    useLayoutEffect(() => {
+        if (state.type === 'clear') {
+            return;
+        }
+
+        const fitContent = () => {
+            const frame = frameRef.current;
+            const content = contentRef.current;
+            if (!frame || !content) {
+                return;
+            }
+
+            let nextTextSize = Math.min(frame.clientWidth * 0.09, frame.clientHeight * 0.17, 110);
+            let nextReferenceSize = Math.max(nextTextSize * 0.42, 22);
+
+            content.style.setProperty('--projector-text-size', `${nextTextSize}px`);
+            content.style.setProperty('--projector-reference-size', `${nextReferenceSize}px`);
+
+            while (
+                nextTextSize > 24
+                && (content.scrollHeight > frame.clientHeight || content.scrollWidth > frame.clientWidth)
+            ) {
+                nextTextSize -= 2;
+                nextReferenceSize = Math.max(nextTextSize * 0.42, 18);
+                content.style.setProperty('--projector-text-size', `${nextTextSize}px`);
+                content.style.setProperty('--projector-reference-size', `${nextReferenceSize}px`);
+            }
+
+            setTextSize(nextTextSize);
+            setReferenceSize(nextReferenceSize);
+        };
+
+        fitContent();
+
+        const resizeObserver = new ResizeObserver(() => {
+            fitContent();
+        });
+
+        if (frameRef.current) {
+            resizeObserver.observe(frameRef.current);
+        }
+
+        return () => {
+            resizeObserver.disconnect();
+        };
+    }, [state]);
 
     useEffect(() => {
         const receiver = createReceiver((newState) => {
@@ -53,11 +108,28 @@ export default function ProjectorView() {
 
     return (
         <div className="projector-view" onClick={requestFullscreen}>
-            <div className="projector-content">
-                <div className="projector-text">{state.text}</div>
+            <div className="projector-frame" ref={frameRef}>
+                <div
+                    className="projector-content"
+                    ref={contentRef}
+                    style={projectorStyle}
+                >
+                <div className="projector-text">
+                    {state.segments && state.segments.length > 0 ? (
+                        state.segments.map((segment) => (
+                            <span key={`${state.reference}-${segment.verseNumber}`} className="projector-verse-segment">
+                                <span className="projector-verse-number">{segment.verseNumber}</span>
+                                <span>{segment.text}</span>
+                            </span>
+                        ))
+                    ) : (
+                        state.text
+                    )}
+                </div>
                 {state.reference && (
                     <div className="projector-reference">{state.reference}</div>
                 )}
+                </div>
             </div>
         </div>
     );

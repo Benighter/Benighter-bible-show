@@ -1,8 +1,14 @@
+export interface VerseSegment {
+    verseNumber: number;
+    text: string;
+}
+
 export interface PresentationState {
     type: 'verse' | 'song' | 'clear' | 'blank' | 'logo';
     text: string;
     reference?: string;
     background?: string;
+    segments?: VerseSegment[];
 }
 
 type ChannelMessage =

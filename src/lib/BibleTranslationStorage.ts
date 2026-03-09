@@ -1,4 +1,4 @@
-import type { BibleTranslation } from './BibleTranslations';
+import { sanitizeTranslation, type BibleTranslation } from './BibleTranslations';
 
 const DATABASE_NAME = 'bible-show';
 const DATABASE_VERSION = 1;
@@ -36,7 +36,7 @@ export async function loadStoredTranslations(): Promise<BibleTranslation[]> {
 
         request.onsuccess = () => {
             const record = request.result as TranslationRecord | undefined;
-            resolve(record?.value ?? []);
+            resolve((record?.value ?? []).map((translation) => sanitizeTranslation(translation)));
         };
         request.onerror = () => reject(request.error ?? new Error('Unable to read stored translations.'));
 

@@ -1,6 +1,6 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react';
-import { createProjectorPresenceListener, createSender, type PresentationState } from './lib/Broadcast';
-import { parseBibleTranslationFile, serializeBibleTranslation, type BibleTranslation, type SlideItem } from './lib/BibleTranslations';
+import { createProjectorPresenceListener, createSender, type PresentationState, type VerseSegment } from './lib/Broadcast';
+import { canonicalizeBookName, parseBibleTranslationFile, serializeBibleTranslation, type BibleTranslation, type SlideItem } from './lib/BibleTranslations';
 import { loadStoredTranslations, saveStoredTranslations } from './lib/BibleTranslationStorage';
 import { Play, Square, MonitorPlay, ListPlus, XCircle, FilePlus, FolderOpen, Save, Store, Globe, Bell, Image, CircleStop, ChevronRight, ChevronDown } from 'lucide-react';
 import './index.css';
@@ -37,7 +37,14 @@ const SCRIPTURE_TABLE_LIMIT = 250;
 type ScriptureSearchMatch = {
     results: SlideItem[];
     targetVerse: SlideItem | null;
+    targetRange: SlideItem[] | null;
+    rangeReference: string | null;
     chapterLabel: string | null;
+};
+
+type BookOption = {
+    book: string;
+    chapters: number[];
 };
 
 function normalizeReferenceText(value: string) {
@@ -62,17 +69,57 @@ function parseVerseReference(ref: string) {
     };
 }
 
+function buildRangeSlideItem(items: SlideItem[]): SlideItem | null {
+    if (items.length === 0) {
+        return null;
+    }
+
+    const firstRef = parseVerseReference(items[0].ref);
+    const lastRef = parseVerseReference(items[items.length - 1].ref);
+    if (!firstRef || !lastRef) {
+        return null;
+    }
+
+    const rangeReference = `${firstRef.book} ${firstRef.chapter}:${firstRef.verse}-${lastRef.verse}`;
+    const segments: VerseSegment[] = items
+        .map((item) => {
+            const parsedRef = parseVerseReference(item.ref);
+            if (!parsedRef) {
+                return null;
+            }
+
+            return {
+                verseNumber: parsedRef.verse,
+                text: item.text,
+            } satisfies VerseSegment;
+        })
+        .filter((segment): segment is VerseSegment => segment !== null);
+
+    return {
+        id: `${items[0].id}-range-${lastRef.verse}`,
+        ref: rangeReference,
+        text: segments.map((segment) => `${segment.verseNumber}. ${segment.text}`).join(' '),
+        segments,
+        translationShortName: items[0].translationShortName,
+    };
+}
+
+function formatSlideReference(item: SlideItem) {
+    return item.translationShortName ? `${item.ref} (${item.translationShortName})` : item.ref;
+}
+
 function findScriptureMatches(query: string, verses: SlideItem[]): ScriptureSearchMatch | null {
     const normalizedQuery = normalizeReferenceText(query);
     if (!normalizedQuery) {
         return null;
     }
 
-    const referenceMatch = normalizedQuery.match(/^(.+?)\s+(\d+)(?::(\d+))?$/);
+    const referenceMatch = normalizedQuery.match(/^(.+?)\s+(\d+)(?:(?::|\s+)(\d+)(?:\s*-\s*(\d+))?)?$/);
     if (referenceMatch) {
-        const bookQuery = normalizeReferenceText(referenceMatch[1]);
+        const bookQuery = normalizeReferenceText(canonicalizeBookName(referenceMatch[1]));
         const chapter = Number.parseInt(referenceMatch[2], 10);
         const verse = referenceMatch[3] ? Number.parseInt(referenceMatch[3], 10) : null;
+        const endVerse = referenceMatch[4] ? Number.parseInt(referenceMatch[4], 10) : null;
 
         const chapterResults = verses.filter((item) => {
             const parsedRef = parseVerseReference(item.ref);
@@ -80,11 +127,20 @@ function findScriptureMatches(query: string, verses: SlideItem[]): ScriptureSear
         });
 
         if (chapterResults.length > 0) {
+            const rangeResults = verse != null && endVerse != null
+                ? chapterResults.filter((item) => {
+                    const parsedRef = parseVerseReference(item.ref);
+                    return parsedRef != null && parsedRef.verse >= verse && parsedRef.verse <= endVerse;
+                })
+                : null;
+
             return {
-                results: chapterResults,
+                results: rangeResults && rangeResults.length > 0 ? rangeResults : chapterResults,
                 targetVerse: verse == null
                     ? null
                     : chapterResults.find((item) => parseVerseReference(item.ref)?.verse === verse) ?? null,
+                targetRange: rangeResults && rangeResults.length > 0 ? rangeResults : null,
+                rangeReference: rangeResults && rangeResults.length > 0 ? buildRangeSlideItem(rangeResults)?.ref ?? null : null,
                 chapterLabel: chapterResults[0].ref.split(':')[0],
             };
         }
@@ -98,8 +154,32 @@ function findScriptureMatches(query: string, verses: SlideItem[]): ScriptureSear
     return {
         results: textResults,
         targetVerse: null,
+        targetRange: null,
+        rangeReference: null,
         chapterLabel: null,
     };
+}
+
+function buildBookOptions(verses: SlideItem[]): BookOption[] {
+    const chaptersByBook = new Map<string, Set<number>>();
+
+    for (const verse of verses) {
+        const parsedRef = parseVerseReference(verse.ref);
+        if (!parsedRef) {
+            continue;
+        }
+
+        if (!chaptersByBook.has(parsedRef.book)) {
+            chaptersByBook.set(parsedRef.book, new Set<number>());
+        }
+
+        chaptersByBook.get(parsedRef.book)?.add(parsedRef.chapter);
+    }
+
+    return Array.from(chaptersByBook.entries()).map(([book, chapters]) => ({
+        book,
+        chapters: Array.from(chapters).sort((left, right) => left - right),
+    }));
 }
 
 const builtInTranslation: BibleTranslation = {
@@ -131,6 +211,8 @@ export default function ControlPanel() {
     const [resTab, setResTab] = useState('Songs');
     const [searchQuery, setSearchQuery] = useState('');
     const [committedScriptureQuery, setCommittedScriptureQuery] = useState('');
+    const [selectedBook, setSelectedBook] = useState('');
+    const [selectedChapter, setSelectedChapter] = useState('');
     const [translations, setTranslations] = useState<BibleTranslation[]>([builtInTranslation]);
     const [activeTranslationId, setActiveTranslationId] = useState(BUILT_IN_TRANSLATION_ID);
     const [translationStatus, setTranslationStatus] = useState<string | null>(null);
@@ -194,7 +276,18 @@ export default function ControlPanel() {
     }, [clearProjectorHeartbeatTimeout]);
 
     const activeTranslation = translations.find((translation) => translation.id === activeTranslationId) ?? translations[0] ?? builtInTranslation;
-    const scriptureItems = activeTranslation?.verses ?? builtInVerses;
+    const scriptureItems = useMemo(
+        () => (activeTranslation?.verses ?? builtInVerses).map((verse) => ({
+            ...verse,
+            translationShortName: verse.translationShortName ?? activeTranslation.shortName,
+        })),
+        [activeTranslation],
+    );
+    const bookOptions = useMemo(() => buildBookOptions(scriptureItems), [scriptureItems]);
+    const chapterOptions = useMemo(
+        () => bookOptions.find((option) => option.book === selectedBook)?.chapters ?? [],
+        [bookOptions, selectedBook],
+    );
     const scriptureSearchMatch = useMemo(
         () => findScriptureMatches(committedScriptureQuery, scriptureItems),
         [committedScriptureQuery, scriptureItems],
@@ -213,6 +306,30 @@ export default function ControlPanel() {
     );
     const hiddenWorkspaceItemCount = Math.max(filteredScriptureItems.length - visibleWorkspaceItems.length, 0);
     const hiddenScriptureRowCount = Math.max(filteredScriptureItems.length - visibleScriptureRows.length, 0);
+
+    useEffect(() => {
+        if (!selectedBook || bookOptions.some((option) => option.book === selectedBook)) {
+            return;
+        }
+
+        setSelectedBook('');
+        setSelectedChapter('');
+    }, [bookOptions, selectedBook]);
+
+    useEffect(() => {
+        if (!selectedBook) {
+            if (selectedChapter) {
+                setSelectedChapter('');
+            }
+            return;
+        }
+
+        if (selectedChapter && chapterOptions.includes(Number.parseInt(selectedChapter, 10))) {
+            return;
+        }
+
+        setSelectedChapter(chapterOptions[0] ? String(chapterOptions[0]) : '');
+    }, [chapterOptions, selectedBook, selectedChapter]);
 
     useEffect(() => {
         const hydrateTranslations = async () => {
@@ -384,7 +501,12 @@ export default function ControlPanel() {
     };
 
     const sendItemToLive = async (item: SlideItem) => {
-        const nextPresentationState: PresentationState = { type: 'verse', text: item.text, reference: item.ref };
+        const nextPresentationState: PresentationState = {
+            type: 'verse',
+            text: item.text,
+            reference: formatSlideReference(item),
+            segments: item.segments,
+        };
         setPreviewItem(item);
         latestPresentationStateRef.current = nextPresentationState;
 
@@ -409,12 +531,17 @@ export default function ControlPanel() {
         }
     };
 
-    const runScriptureSearch = async () => {
-        if (resTab !== 'Scriptures') {
+    const sendRangeToLive = async (items: SlideItem[]) => {
+        const rangeItem = buildRangeSlideItem(items);
+        if (!rangeItem) {
             return;
         }
 
-        const trimmedQuery = searchQuery.trim();
+        await sendItemToLive(rangeItem);
+    };
+
+    const runScriptureSearchFromQuery = async (rawQuery: string) => {
+        const trimmedQuery = rawQuery.trim();
         if (!trimmedQuery) {
             setCommittedScriptureQuery('');
             lastSubmittedSearchRef.current = '';
@@ -425,9 +552,15 @@ export default function ControlPanel() {
         const searchMatch = findScriptureMatches(trimmedQuery, scriptureItems);
         const normalizedQuery = normalizeReferenceText(trimmedQuery);
         const repeatedSubmission = lastSubmittedSearchRef.current === normalizedQuery;
+        const parsedSearchRef = searchMatch?.results[0] ? parseVerseReference(searchMatch.results[0].ref) : null;
 
         lastSubmittedSearchRef.current = normalizedQuery;
         setCommittedScriptureQuery(trimmedQuery);
+
+        if (parsedSearchRef) {
+            setSelectedBook(parsedSearchRef.book);
+            setSelectedChapter(String(parsedSearchRef.chapter));
+        }
 
         if (!searchMatch) {
             setTranslationStatus(`No scriptures matched "${trimmedQuery}" in ${activeTranslation.shortName}.`);
@@ -435,7 +568,13 @@ export default function ControlPanel() {
         }
 
         if (searchMatch.results[0]) {
-            setPreviewItem(searchMatch.targetVerse ?? searchMatch.results[0]);
+            setPreviewItem(searchMatch.targetRange ? buildRangeSlideItem(searchMatch.targetRange) ?? searchMatch.results[0] : searchMatch.targetVerse ?? searchMatch.results[0]);
+        }
+
+        if (searchMatch.targetRange) {
+            setTranslationStatus(`Showing and projecting ${searchMatch.rangeReference}.`);
+            await sendRangeToLive(searchMatch.targetRange);
+            return;
         }
 
         if (searchMatch.targetVerse) {
@@ -456,6 +595,49 @@ export default function ControlPanel() {
         }
 
         setTranslationStatus(`Showing ${searchMatch.results.length} scripture matches for "${trimmedQuery}".`);
+    };
+
+    const runScriptureSearch = async () => {
+        if (resTab !== 'Scriptures') {
+            return;
+        }
+
+        await runScriptureSearchFromQuery(searchQuery);
+    };
+
+    const handleBookSelectionChange = (nextBook: string) => {
+        setSelectedBook(nextBook);
+
+        if (!nextBook) {
+            setSelectedChapter('');
+            setSearchQuery('');
+            setCommittedScriptureQuery('');
+            lastSubmittedSearchRef.current = '';
+            return;
+        }
+
+        const nextChapter = bookOptions.find((option) => option.book === nextBook)?.chapters[0];
+        if (!nextChapter) {
+            return;
+        }
+
+        const nextQuery = `${nextBook} ${nextChapter}`;
+        setSelectedChapter(String(nextChapter));
+        setSearchQuery(nextQuery);
+        lastSubmittedSearchRef.current = '';
+        void Promise.resolve().then(() => runScriptureSearchFromQuery(nextQuery));
+    };
+
+    const handleChapterSelectionChange = (nextChapter: string) => {
+        setSelectedChapter(nextChapter);
+        if (!selectedBook || !nextChapter) {
+            return;
+        }
+
+        const nextQuery = `${selectedBook} ${nextChapter}`;
+        setSearchQuery(nextQuery);
+        lastSubmittedSearchRef.current = '';
+        void Promise.resolve().then(() => runScriptureSearchFromQuery(nextQuery));
     };
 
     const clearLiveScreen = () => {
@@ -526,6 +708,27 @@ export default function ControlPanel() {
             event.target.value = '';
         }
     };
+
+    const renderMonitorContent = (item: SlideItem) => (
+        <>
+            <div className="screen-bg"></div>
+            <div className="screen-content scripture-monitor-content">
+                <div className="screen-text projector-text scripture-monitor-text">
+                    {item.segments && item.segments.length > 0 ? (
+                        item.segments.map((segment) => (
+                            <span key={`${item.id}-${segment.verseNumber}`} className="projector-verse-segment">
+                                <span className="projector-verse-number">{segment.verseNumber}</span>
+                                <span>{segment.text}</span>
+                            </span>
+                        ))
+                    ) : (
+                        item.text
+                    )}
+                </div>
+                <div className="projector-reference scripture-monitor-reference">{formatSlideReference(item)}</div>
+            </div>
+        </>
+    );
 
     return (
         <div className="control-panel">
@@ -623,7 +826,7 @@ export default function ControlPanel() {
                                     {!isLive && isPreviewing && <div className="slide-badge badge-preview">Preview</div>}
 
                                     <div className="slide-text">"{item.text}"</div>
-                                    <div style={{ color: '#888', fontSize: '10px', marginTop: '10px' }}>{item.ref}</div>
+                                    <div style={{ color: '#888', fontSize: '10px', marginTop: '10px' }}>{formatSlideReference(item)}</div>
                                 </div>
                             );
                         })}
@@ -637,7 +840,7 @@ export default function ControlPanel() {
                         {resTab === 'Scriptures' && !committedScriptureQuery && (
                             <div className="slide-card slide-card-info">
                                 <div className="slide-text">
-                                    Search for a scripture reference like John 1 or John 1:13 to show matching verses here.
+                                    Search for a scripture reference like ge 1 1, jn 3 16, John 1, or pick a book and chapter below.
                                 </div>
                             </div>
                         )}
@@ -650,13 +853,7 @@ export default function ControlPanel() {
                         <div className="monitor-title" style={{ color: isLiveOffline ? '#888' : '#e51400' }}>Live Output</div>
                         <div className={`monitor ${!isLiveOffline ? 'live-active' : ''}`}>
                             {!isLiveOffline && liveItem ? (
-                                <>
-                                    <div className="screen-bg"></div>
-                                    <div className="screen-content">
-                                        <div className="screen-text">{liveItem.text}</div>
-                                        <div style={{ fontSize: '10px', color: '#f1c40f', marginTop: '5px' }}>{liveItem.ref}</div>
-                                    </div>
-                                </>
+                                renderMonitorContent(liveItem)
                             ) : (
                                 <div className="placeholder-text">Logo / Black</div>
                             )}
@@ -667,13 +864,7 @@ export default function ControlPanel() {
                         <div className="monitor-title" style={{ color: '#f39c12' }}>Preview</div>
                         <div className="monitor">
                             {previewItem ? (
-                                <>
-                                    <div className="screen-bg"></div>
-                                    <div className="screen-content">
-                                        <div className="screen-text">{previewItem.text}</div>
-                                        <div style={{ fontSize: '10px', color: '#f1c40f', marginTop: '5px' }}>{previewItem.ref}</div>
-                                    </div>
-                                </>
+                                renderMonitorContent(previewItem)
                             ) : (
                                 <div className="placeholder-text">Select an item</div>
                             )}
@@ -732,6 +923,31 @@ export default function ControlPanel() {
                                 </div>
                             )}
                         </div>
+                        {resTab === 'Scriptures' && (
+                            <div className="scripture-navigation-row">
+                                <select
+                                    className="scripture-nav-select"
+                                    value={selectedBook}
+                                    onChange={(event) => handleBookSelectionChange(event.target.value)}
+                                >
+                                    <option value="">Book</option>
+                                    {bookOptions.map((option) => (
+                                        <option key={option.book} value={option.book}>{option.book}</option>
+                                    ))}
+                                </select>
+                                <select
+                                    className="scripture-nav-select"
+                                    value={selectedChapter}
+                                    onChange={(event) => handleChapterSelectionChange(event.target.value)}
+                                    disabled={!selectedBook || chapterOptions.length === 0}
+                                >
+                                    <option value="">Chapter</option>
+                                    {chapterOptions.map((chapter) => (
+                                        <option key={chapter} value={chapter}>{chapter}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
                         {resTab === 'Scriptures' && (
                             <div className="translation-panel">
                                 <div className="translation-panel-header">Translations</div>
