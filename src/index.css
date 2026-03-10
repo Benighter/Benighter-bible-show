@@ -916,6 +916,20 @@ body.projector-mode #root {
   border-right-color: rgba(255, 255, 255, 0.2);
 }
 
+.datagrid-row.previewing {
+  box-shadow: inset 3px 0 0 var(--preview-color);
+}
+
+.datagrid-row.live-now {
+  background: rgba(229, 20, 0, 0.18);
+  color: #fff;
+  box-shadow: inset 3px 0 0 var(--live-color);
+}
+
+.datagrid-row.live-now .datagrid-cell {
+  border-right-color: rgba(229, 20, 0, 0.25);
+}
+
 .datagrid-cell-action {
   display: flex;
   align-items: center;

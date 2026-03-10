@@ -134,6 +134,39 @@ function findMatchingProjectedItem(reference: string, verses: SlideItem[]) {
     return scriptureMatch.targetVerse ?? scriptureMatch.results[0] ?? null;
 }
 
+function getDefaultTranslationId(translations: BibleTranslation[]) {
+    const preferredTranslation = translations.find((translation) => {
+        const shortName = translation.shortName.trim().toLowerCase();
+        const name = translation.name.trim().toLowerCase();
+
+        return shortName === 'kjv' || shortName.startsWith('kjv') || name.includes('king james');
+    });
+
+    return preferredTranslation?.id ?? translations[0]?.id ?? BUILT_IN_TRANSLATION_ID;
+}
+
+function buildVisibleScriptureRows(items: SlideItem[], focusedItem: SlideItem | null, limit: number) {
+    const initialRows = items.slice(0, limit);
+    if (!focusedItem) {
+        return initialRows;
+    }
+
+    const focusedItemIndex = items.findIndex((item) => item.id === focusedItem.id);
+    if (focusedItemIndex === -1) {
+        return initialRows;
+    }
+
+    const rowsBeforeFocusedItem = Math.min(4, focusedItemIndex);
+    const startIndex = Math.max(focusedItemIndex - rowsBeforeFocusedItem, 0);
+    const nextRows = items.slice(startIndex, startIndex + limit);
+
+    if (nextRows.length >= limit || startIndex === 0) {
+        return nextRows;
+    }
+
+    return items.slice(Math.max(items.length - limit, 0));
+}
+
 function findScriptureMatches(query: string, verses: SlideItem[]): ScriptureSearchMatch | null {
     const normalizedQuery = normalizeReferenceText(query);
     if (!normalizedQuery) {
@@ -367,13 +400,32 @@ export default function ControlPanel() {
         () => scriptureSearchMatch?.results ?? [],
         [scriptureSearchMatch],
     );
+    const highlightedScriptureItem = useMemo(() => {
+        if (scriptureSearchMatch?.targetVerse && filteredScriptureItems.some((item) => item.id === scriptureSearchMatch.targetVerse?.id)) {
+            return scriptureSearchMatch.targetVerse;
+        }
+
+        if (scriptureSearchMatch?.targetRange?.[0] && filteredScriptureItems.some((item) => item.id === scriptureSearchMatch.targetRange?.[0]?.id)) {
+            return scriptureSearchMatch.targetRange[0];
+        }
+
+        if (liveItem && filteredScriptureItems.some((item) => item.id === liveItem.id)) {
+            return liveItem;
+        }
+
+        if (previewItem && filteredScriptureItems.some((item) => item.id === previewItem.id)) {
+            return previewItem;
+        }
+
+        return null;
+    }, [filteredScriptureItems, liveItem, previewItem, scriptureSearchMatch]);
     const visibleWorkspaceItems = useMemo(
         () => filteredScriptureItems.slice(0, SCRIPTURE_WORKSPACE_LIMIT),
         [filteredScriptureItems],
     );
     const visibleScriptureRows = useMemo(
-        () => filteredScriptureItems.slice(0, SCRIPTURE_TABLE_LIMIT),
-        [filteredScriptureItems],
+        () => buildVisibleScriptureRows(filteredScriptureItems, highlightedScriptureItem, SCRIPTURE_TABLE_LIMIT),
+        [filteredScriptureItems, highlightedScriptureItem],
     );
     const hiddenWorkspaceItemCount = Math.max(filteredScriptureItems.length - visibleWorkspaceItems.length, 0);
     const hiddenScriptureRowCount = Math.max(filteredScriptureItems.length - visibleScriptureRows.length, 0);
@@ -441,11 +493,14 @@ export default function ControlPanel() {
                     builtInTranslation,
                     ...storedTranslations.filter((translation) => translation.id !== BUILT_IN_TRANSLATION_ID),
                 ];
+                const defaultTranslationId = getDefaultTranslationId(mergedTranslations);
 
                 setTranslations(mergedTranslations);
 
                 if (storedActiveTranslationId && mergedTranslations.some((translation) => translation.id === storedActiveTranslationId)) {
                     setActiveTranslationId(storedActiveTranslationId);
+                } else {
+                    setActiveTranslationId(defaultTranslationId);
                 }
             } catch (err) {
                 console.warn('Unable to restore imported Bible translations.', err);
@@ -591,6 +646,15 @@ export default function ControlPanel() {
         setPreviewItem(item);
     };
 
+    const handleScriptureTableSelect = (item: SlideItem) => {
+        if (isLiveOffline) {
+            sendToPreview(item);
+            return;
+        }
+
+        void sendItemToLive(item);
+    };
+
     const addToSession = (item: SlideItem) => {
         setSessionItems((currentItems) => (currentItems.some((currentItem) => currentItem.id === item.id) ? currentItems : [...currentItems, item]));
     };
@@ -673,14 +737,24 @@ export default function ControlPanel() {
         }
 
         if (searchMatch.targetRange) {
-            setTranslationStatus(`Showing and projecting ${searchMatch.rangeReference}.`);
-            await sendRangeToLive(searchMatch.targetRange);
+            if (repeatedSubmission) {
+                setTranslationStatus(`Projecting ${searchMatch.rangeReference}.`);
+                await sendRangeToLive(searchMatch.targetRange);
+                return;
+            }
+
+            setTranslationStatus(`Showing ${searchMatch.rangeReference}. Press Enter again to project.`);
             return;
         }
 
         if (searchMatch.targetVerse) {
-            setTranslationStatus(`Showing ${searchMatch.chapterLabel} and projecting ${searchMatch.targetVerse.ref}.`);
-            await sendItemToLive(searchMatch.targetVerse);
+            if (repeatedSubmission) {
+                setTranslationStatus(`Projecting ${searchMatch.targetVerse.ref}.`);
+                await sendItemToLive(searchMatch.targetVerse);
+                return;
+            }
+
+            setTranslationStatus(`Showing ${searchMatch.chapterLabel}. Press Enter again to project ${searchMatch.targetVerse.ref}.`);
             return;
         }
 
@@ -1240,12 +1314,14 @@ export default function ControlPanel() {
 
                                 {resTab === 'Scriptures' && visibleScriptureRows.map(verse => (
                                     <div key={verse.id}
-                                        className={`datagrid-row ${previewItem?.id === verse.id ? 'active' : ''}`}
-                                        onClick={() => void sendItemToLive(verse)}
+                                        className={`datagrid-row ${previewItem?.id === verse.id ? 'active previewing' : ''} ${liveItem?.id === verse.id && !isLiveOffline ? 'live-now' : ''}`}
+                                        onClick={() => handleScriptureTableSelect(verse)}
                                         onDoubleClick={() => void sendItemToLive(verse)}
                                         tabIndex={0}
                                         onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
-                                            if (e.key === 'Enter') { void sendItemToLive(verse); }
+                                            if (e.key === 'Enter') {
+                                                handleScriptureTableSelect(verse);
+                                            }
                                         }}
                                     >
                                         <div className="datagrid-cell" style={{ fontWeight: 'bold' }}>{verse.ref}</div>
