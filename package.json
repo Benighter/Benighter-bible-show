@@ -11,6 +11,7 @@
     "projector:kiosk": "powershell -ExecutionPolicy Bypass -File ./launch-projector.ps1 -Url http://localhost:5173/projector"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.99.0",
     "buffer": "^6.0.3",
     "lucide-react": "^0.577.0",
     "mdb-reader": "^3.2.0",
