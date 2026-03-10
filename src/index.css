@@ -47,9 +47,87 @@ body.projector-mode #root {
 /* Control Panel 4-Area Layout */
 .control-panel {
   display: grid;
-  grid-template-rows: 30px 65px 1fr 1.2fr;
+  grid-template-rows: 30px 65px minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
+}
+
+.control-panel-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.resizable-panel-group {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.resizable-panel-group.horizontal {
+  flex-direction: row;
+}
+
+.resizable-panel-group.vertical {
+  flex-direction: column;
+}
+
+.resizable-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.resizable-panel > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.resizable-handle {
+  position: relative;
+  flex: 0 0 auto;
+  background: #17181b;
+  z-index: 2;
+  touch-action: none;
+}
+
+.resizable-handle::after {
+  content: '';
+  position: absolute;
+  inset: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.resizable-handle.horizontal {
+  width: 8px;
+  cursor: col-resize;
+}
+
+.resizable-handle.horizontal::after {
+  width: 3px;
+  height: 44px;
+}
+
+.resizable-handle.vertical {
+  height: 8px;
+  cursor: row-resize;
+}
+
+.resizable-handle.vertical::after {
+  width: 44px;
+  height: 3px;
+}
+
+.resizable-handle:hover,
+.is-resizing-panels .resizable-handle {
+  background: #1f363d;
 }
 
 /* 1. Menu Bar */
@@ -146,10 +224,19 @@ body.projector-mode #root {
 
 /* 3. Workspace */
 .workspace {
-  display: grid;
-  grid-template-columns: 280px 1fr 380px;
   border-bottom: 2px solid #000;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-layout,
+.main-layout,
+.resources-content,
+.monitors-layout,
+.schedule-stack-layout {
+  min-width: 0;
+  min-height: 0;
 }
 
 .pane {
@@ -157,6 +244,8 @@ body.projector-mode #root {
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
+  min-width: 0;
+  min-height: 0;
 }
 
 .pane:last-child {
@@ -194,6 +283,53 @@ body.projector-mode #root {
 .pane-content {
   flex: 1;
   overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.schedule-pane-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.schedule-subpane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #202226;
+}
+
+.schedule-subpane-header {
+  padding: 8px 10px;
+  border-bottom: 1px solid #333;
+  background: #25282d;
+  color: #aab1ba;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.schedule-subpane-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.schedule-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.schedule-translation-dock {
+  border-top: none;
+  border-bottom: none;
+  border-right: 1px solid #333;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Schedule List */
@@ -222,6 +358,7 @@ body.projector-mode #root {
   gap: 10px;
   padding: 10px;
   align-content: start;
+  min-width: 0;
 }
 
 .slide-card {
@@ -236,6 +373,7 @@ body.projector-mode #root {
   flex-direction: column;
   justify-content: center;
   transition: all 0.1s;
+  min-width: 0;
 }
 
 .slide-card:hover {
@@ -294,15 +432,16 @@ body.projector-mode #root {
 .monitors-pane {
   background: #1a1a1a;
   padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .monitor-wrapper {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .monitor-title {
@@ -314,7 +453,7 @@ body.projector-mode #root {
 
 .monitor {
   background: #000;
-  aspect-ratio: 16/9;
+  flex: 1;
   border: 1px solid #444;
   border-radius: 4px;
   position: relative;
@@ -322,6 +461,7 @@ body.projector-mode #root {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  min-height: 0;
 }
 
 .monitor.live-active {
@@ -436,6 +576,8 @@ body.projector-mode #root {
   flex-direction: column;
   background: #1e1e1e;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
 }
 
 .resources-tabs {
@@ -474,18 +616,35 @@ body.projector-mode #root {
 
 .resources-content {
   flex: 1;
-  display: grid;
-  grid-template-columns: 220px 1fr 380px;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Collections Pane */
 .res-collections {
   border-right: 1px solid var(--border);
   background: #252526;
-  overflow-y: auto;
+  overflow: hidden;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.collections-controls {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #252526;
+  flex: 0 0 auto;
+}
+
+.collections-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .collection-search {
@@ -493,10 +652,12 @@ body.projector-mode #root {
   border-bottom: 1px solid #333;
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .collection-search input {
   flex: 1;
+  min-width: 0;
   background: #1e1e1e;
   border: 1px solid #444;
   color: #fff;
@@ -513,6 +674,8 @@ body.projector-mode #root {
 .scripture-search-actions {
   display: flex;
   gap: 6px;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
 }
 
 .scripture-navigation-row {
@@ -520,10 +683,12 @@ body.projector-mode #root {
   border-bottom: 1px solid #333;
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .scripture-nav-select {
   flex: 1;
+  min-width: 0;
   background: #1e1e1e;
   border: 1px solid #444;
   color: #fff;
@@ -546,7 +711,7 @@ body.projector-mode #root {
   background: #202327;
   color: #ddd;
   border-radius: 4px;
-  padding: 0 10px;
+  padding: 7px 10px;
   font-size: 11px;
   cursor: pointer;
 }
@@ -563,11 +728,12 @@ body.projector-mode #root {
 }
 
 .translation-panel {
-  padding: 10px 8px;
-  border-bottom: 1px solid #333;
+  padding: 6px;
+  border-bottom: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+  min-width: 0;
 }
 
 .translation-panel-header {
@@ -581,9 +747,15 @@ body.projector-mode #root {
 .translation-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 150px;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.translation-list::-webkit-scrollbar {
+  display: none;
 }
 
 .translation-list-item {
@@ -596,9 +768,34 @@ body.projector-mode #root {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 4px;
+  padding: 6px 8px;
   text-align: left;
+}
+
+.translation-list-compact {
+  gap: 4px;
+}
+
+.translation-list-item-compact {
+  justify-content: center;
+  min-height: 38px;
+  padding: 5px 6px;
+  font-size: 11px;
+}
+
+.translation-list-item-compact span {
+  color: #6ddbd7;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
+}
+
+.translation-list-item-compact span {
+  color: #6ddbd7;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
 }
 
 .translation-list-item:hover {
@@ -619,6 +816,10 @@ body.projector-mode #root {
 .translation-list-item span:last-child {
   color: #b8b8b8;
   font-size: 11px;
+}
+
+.translation-list-item-compact span:last-child {
+  font-size: inherit;
 }
 
 .translation-status {
@@ -654,8 +855,11 @@ body.projector-mode #root {
   border-right: 1px solid var(--border);
   background: #1e1e1e;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 
 .datagrid-header {
@@ -666,11 +870,19 @@ body.projector-mode #root {
   font-size: 11px;
   color: #aaa;
   font-weight: bold;
+  min-width: 0;
+}
+
+.datagrid-header:has(.datagrid-cell-action) {
+  grid-template-columns: 1.6fr 1fr 1.4fr 110px;
 }
 
 .datagrid-cell {
   padding: 6px 8px;
   border-right: 1px solid #333;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .datagrid-cell:last-child {
@@ -684,6 +896,11 @@ body.projector-mode #root {
   color: #ddd;
   border-bottom: 1px solid #2a2a2a;
   cursor: pointer;
+  min-width: 0;
+}
+
+.datagrid-row:has(.datagrid-cell-action) {
+  grid-template-columns: 1.6fr 1fr 1.4fr 110px;
 }
 
 .datagrid-row:hover {
@@ -697,6 +914,36 @@ body.projector-mode #root {
 
 .datagrid-row.active .datagrid-cell {
   border-right-color: rgba(255, 255, 255, 0.2);
+}
+
+.datagrid-cell-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.schedule-add-btn {
+  width: 100%;
+  border: 1px solid #3d4d56;
+  background: #1d2429;
+  color: #dbe5eb;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.schedule-add-btn:hover {
+  border-color: #1db5b2;
+  background: #233038;
+  color: #fff;
+}
+
+.schedule-add-btn.saved {
+  border-color: rgba(29, 181, 178, 0.6);
+  background: rgba(29, 181, 178, 0.14);
+  color: #7de7df;
 }
 
 .scripture-result-summary {
@@ -713,6 +960,9 @@ body.projector-mode #root {
   padding: 0;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .res-preview-image {
@@ -722,6 +972,9 @@ body.projector-mode #root {
   align-items: center;
   justify-content: center;
   position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .res-preview-image::after {
@@ -740,6 +993,9 @@ body.projector-mode #root {
   text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
   font-size: 1.1rem;
   font-weight: bold;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
 }
 
 .res-preview-footer {
