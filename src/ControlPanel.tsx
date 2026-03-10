@@ -1,11 +1,13 @@
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react';
-import { createProjectorPresenceListener, createSender, type PresentationState, type VerseSegment } from './lib/Broadcast';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { createProjectorPresenceListener, createSender, type PresentationState, type SlideTextStyle, type VerseSegment } from './lib/Broadcast';
 import { canonicalizeBookName, parseBibleTranslationFile, sanitizeTranslation, serializeBibleTranslation, type BibleTranslation, type SlideItem } from './lib/BibleTranslations';
-import { defaultAppSettings, type AppSettings, type MediaItem, type PresentationItem, type ResourceTab, type SongItem, type ThemeItem } from './lib/AppData';
+import { defaultAppSettings, type AppSettings, type MediaItem, type PresentationItem, type ResourceTab, type SongCategory, type SongItem, type SongSlide, type ThemeItem } from './lib/AppData';
 import { loadStoredTranslations as loadCloudTranslations, loadUserWorkspace, saveMediaItems, savePresentations, saveSessionItems, saveSongs, saveStoredTranslations as saveCloudTranslations, saveThemes, saveUserSettings, subscribeToStoredTranslations, subscribeToUserWorkspace } from './lib/FirebaseWorkspaceStorage';
 import { useAuth } from './lib/auth-context';
 import { ResizablePanelGroup } from './lib/ResizablePanelGroup';
-import { Play, Square, MonitorPlay, ListPlus, XCircle, FilePlus, FolderOpen, Save, Store, Globe, Bell, Image, CircleStop, ChevronRight, ChevronDown, LogOut, Trash2 } from 'lucide-react';
+import { Play, Square, MonitorPlay, ListPlus, XCircle, FilePlus, FolderOpen, Save, Store, Globe, Bell, Image, CircleStop, ChevronDown, LogOut, Trash2 } from 'lucide-react';
+import SongEditorModal, { type SongEditorDraft } from './SongEditorModal';
+import { buildSongLyricsFromSlides, buildSongSlideItem, buildSongSlideItems, createSongSlide, getSongPreviewText, mergeSongSlideStyle, normalizeSongSlides } from './lib/SongSlides';
 import './index.css';
 
 interface ManagedScreen {
@@ -30,8 +32,112 @@ type WindowWithScreenDetails = Window & {
 
 const SCRIPTURE_TABLE_LIMIT = 250;
 const RESOURCE_TABS: ResourceTab[] = ['Songs', 'Scriptures', 'Media', 'Presentations', 'Themes', 'Settings'];
+const ALL_SONGS_CATEGORY_ID = 'all-songs';
+const ALL_SONGS_CATEGORY_NAME = 'All Songs';
 const TRANSLATION_CACHE_PREFIX = 'bible-show-translation-cache';
 const TRANSLATION_CACHE_INDEX_LIMIT = 4;
+
+function createSongDraft(categoryId = ''): SongEditorDraft {
+    return {
+        title: '',
+        author: '',
+        copyright: '',
+        categoryId,
+        keySignature: '',
+        tags: '',
+        notes: '',
+        slides: [createSongSlide()],
+    };
+}
+
+function buildSongDraftItem(draft: SongEditorDraft, songId: string): SongItem {
+    const normalizedSlides = draft.slides.map((slide, index) => createSongSlide(slide, index));
+
+    return {
+        id: songId,
+        title: draft.title.trim() || 'Untitled Song',
+        author: draft.author.trim(),
+        copyright: draft.copyright.trim(),
+        lyrics: buildSongLyricsFromSlides(normalizedSlides),
+        slides: normalizedSlides,
+        categoryId: draft.categoryId || null,
+        keySignature: draft.keySignature.trim() || undefined,
+        tags: draft.tags.trim() || undefined,
+        notes: draft.notes.trim() || undefined,
+    } satisfies SongItem;
+}
+
+function buildSongMonitorStyles(style?: SlideTextStyle): { contentStyle: CSSProperties; textStyle: CSSProperties } {
+    const mergedStyle = mergeSongSlideStyle(style);
+
+    return {
+        contentStyle: {
+            justifyContent: mergedStyle.verticalAlign === 'top' ? 'flex-start' : mergedStyle.verticalAlign === 'bottom' ? 'flex-end' : 'center',
+            alignItems: mergedStyle.textAlign === 'left' ? 'flex-start' : mergedStyle.textAlign === 'right' ? 'flex-end' : 'center',
+        },
+        textStyle: {
+            fontFamily: mergedStyle.fontFamily,
+            fontSize: `${Math.max(18, Math.min(44, mergedStyle.fontSize * 0.28))}px`,
+            color: mergedStyle.color,
+            fontWeight: mergedStyle.bold ? 700 : 400,
+            fontStyle: mergedStyle.italic ? 'italic' : 'normal',
+            textAlign: mergedStyle.textAlign,
+            lineHeight: mergedStyle.lineHeight,
+            width: '100%',
+        },
+    };
+}
+
+type QueuedSongGroup = {
+    song: SongItem;
+    slides: SlideItem[];
+    firstSessionIndex: number;
+};
+
+type ScheduleEntry = {
+    key: string;
+    representativeItem: SlideItem;
+    label: string;
+    itemIds: string[];
+    kind: 'song' | 'slide';
+    contentType: 'song' | 'scripture' | 'presentation';
+    badgeLabel: string;
+    subtitle: string;
+    detail: string;
+    previewText: string;
+    itemCount: number;
+    songId?: string;
+};
+
+function buildWorkspaceSlideStyles(style?: SlideTextStyle): { contentStyle: CSSProperties; textStyle: CSSProperties } {
+    const mergedStyle = mergeSongSlideStyle(style);
+
+    return {
+        contentStyle: {
+            justifyContent: mergedStyle.verticalAlign === 'top' ? 'flex-start' : mergedStyle.verticalAlign === 'bottom' ? 'flex-end' : 'center',
+            alignItems: mergedStyle.textAlign === 'left' ? 'flex-start' : mergedStyle.textAlign === 'right' ? 'flex-end' : 'center',
+            textAlign: mergedStyle.textAlign,
+        },
+        textStyle: {
+            fontFamily: mergedStyle.fontFamily,
+            fontSize: `${Math.max(16, Math.min(34, mergedStyle.fontSize * 0.22))}px`,
+            color: mergedStyle.color,
+            fontWeight: mergedStyle.bold ? 700 : 400,
+            fontStyle: mergedStyle.italic ? 'italic' : 'normal',
+            lineHeight: mergedStyle.lineHeight,
+            textAlign: mergedStyle.textAlign,
+            width: '100%',
+        },
+    };
+}
+
+function isSongSlideItem(item: SlideItem) {
+    return item.kind === 'song' || item.id.startsWith('song-slide-');
+}
+
+function getSongSlideTitle(item: SlideItem) {
+    return item.ref.split(' • ')[0]?.trim() || item.ref;
+}
 
 type ScriptureSearchMatch = {
     results: SlideItem[];
@@ -104,7 +210,41 @@ function buildRangeSlideItem(items: SlideItem[]): SlideItem | null {
 }
 
 function formatSlideReference(item: SlideItem) {
+    if (isSongSlideItem(item)) {
+        return getSongSlideTitle(item);
+    }
+
     return item.translationShortName ? `${item.ref} (${item.translationShortName})` : item.ref;
+}
+
+function isPresentationSlideItem(item: SlideItem) {
+    return item.kind === 'presentation' || item.id.startsWith('presentation-slide-');
+}
+
+function compactPreviewText(value: string | null | undefined, maxLength = 140) {
+    const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
+
+    if (!normalized) {
+        return 'No preview available yet.';
+    }
+
+    if (normalized.length <= maxLength) {
+        return normalized;
+    }
+
+    return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function getScheduleEntryType(item: SlideItem) {
+    if (isSongSlideItem(item)) {
+        return 'song' as const;
+    }
+
+    if (isPresentationSlideItem(item)) {
+        return 'presentation' as const;
+    }
+
+    return 'scripture' as const;
 }
 
 function buildTranslationVerseItems(translation: BibleTranslation) {
@@ -242,12 +382,12 @@ function createEntityId(prefix: string) {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function matchesResourceSearch(values: string[], query: string) {
+function matchesResourceSearch(values: (string | undefined | null)[], query: string) {
     if (!query) {
         return true;
     }
 
-    return values.some((value) => value.toLowerCase().includes(query));
+    return values.some((value) => value && value.toLowerCase().includes(query));
 }
 
 function buildStableSignature(value: unknown): string {
@@ -348,21 +488,13 @@ function isQuotaExceededError(error: unknown) {
     return code.includes('resource-exhausted') || message.toLowerCase().includes('quota exceeded');
 }
 
-function buildSongSlideItem(song: SongItem): SlideItem {
-    return {
-        id: `song-slide-${song.id}`,
-        ref: song.title,
-        text: song.lyrics || song.notes || song.title,
-        translationShortName: song.keySignature ? `Song • ${song.keySignature}` : 'Song',
-    };
-}
-
 function buildPresentationSlideItem(presentation: PresentationItem): SlideItem {
     return {
         id: `presentation-slide-${presentation.id}`,
         ref: presentation.reference.trim() || presentation.title.trim() || 'Presentation',
         text: presentation.content.trim(),
         translationShortName: presentation.category.trim() || 'Presentation',
+        kind: 'presentation',
     };
 }
 
@@ -408,6 +540,7 @@ export default function ControlPanel() {
 
     // Core State
     const [sessionItems, setSessionItems] = useState<SlideItem[]>([]);
+    const [songCategories, setSongCategories] = useState<SongCategory[]>([]);
     const [songs, setSongs] = useState<SongItem[]>([]);
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
     const [themes, setThemes] = useState<ThemeItem[]>([]);
@@ -423,12 +556,18 @@ export default function ControlPanel() {
     const [isImportingTranslation, setIsImportingTranslation] = useState(false);
     const [workspaceStatus, setWorkspaceStatus] = useState<string | null>('Connecting...');
     const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
-    const [songForm, setSongForm] = useState({ title: '', author: '', copyright: '', lyrics: '', keySignature: '', tags: '', notes: '' });
+    const [songForm, setSongForm] = useState<SongEditorDraft>(() => createSongDraft());
     const [mediaForm, setMediaForm] = useState({ title: '', type: '', source: '', notes: '', duration: '', thumbnailUrl: '', aspectRatio: '' });
     const [themeForm, setThemeForm] = useState({ name: '', background: '#111111', textColor: '#f5f5f5', accentColor: '#00aba9', fontFamily: 'Segoe UI', textSize: '96', notes: '' });
     const [presentationForm, setPresentationForm] = useState({ title: '', content: '', reference: '', category: 'Announcement', background: '#000000', themeId: '' });
     const [profileForm, setProfileForm] = useState({ displayName: '' });
     const [accountStatus, setAccountStatus] = useState<string | null>(null);
+    const [selectedSongCategoryId, setSelectedSongCategoryId] = useState<string>(ALL_SONGS_CATEGORY_ID);
+    const [isSongEditorOpen, setIsSongEditorOpen] = useState(false);
+    const [activeSongSlideId, setActiveSongSlideId] = useState<string | null>(null);
+    const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+    const [categoryNameDraft, setCategoryNameDraft] = useState('');
+    const [selectedWorkspaceSongId, setSelectedWorkspaceSongId] = useState<string | null>(null);
     const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
     const [selectedMediaItemId, setSelectedMediaItemId] = useState<string | null>(null);
     const [selectedThemeId, setSelectedThemeId] = useState<string | null>(null);
@@ -583,9 +722,17 @@ export default function ControlPanel() {
     const hiddenScriptureRowCount = Math.max(filteredScriptureItems.length - visibleScriptureRows.length, 0);
     const sessionItemIds = useMemo(() => new Set(sessionItems.map((item) => item.id)), [sessionItems]);
     const normalizedResourceSearch = searchQuery.trim().toLowerCase();
+    const songCategoryOptions = useMemo(
+        () => [{ id: ALL_SONGS_CATEGORY_ID, name: ALL_SONGS_CATEGORY_NAME }, ...songCategories],
+        [songCategories],
+    );
     const filteredSongs = useMemo(
-        () => songs.filter((song) => matchesResourceSearch([song.title, song.author, song.copyright, song.lyrics], normalizedResourceSearch)),
-        [normalizedResourceSearch, songs],
+        () => songs.filter((song) => {
+            const matchesSearch = matchesResourceSearch([song.title, song.author, song.copyright, song.lyrics, song.tags, song.notes], normalizedResourceSearch);
+            const matchesCategory = selectedSongCategoryId === ALL_SONGS_CATEGORY_ID || song.categoryId === selectedSongCategoryId;
+            return matchesSearch && matchesCategory;
+        }),
+        [normalizedResourceSearch, selectedSongCategoryId, songs],
     );
     const filteredMediaItems = useMemo(
         () => mediaItems.filter((item) => matchesResourceSearch([item.title, item.type, item.source, item.notes], normalizedResourceSearch)),
@@ -604,6 +751,106 @@ export default function ControlPanel() {
     const selectedMediaItem = mediaItems.find((item) => item.id === selectedMediaItemId) ?? null;
     const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) ?? null;
     const selectedPresentation = presentations.find((presentation) => presentation.id === selectedPresentationId) ?? null;
+    const selectedSongCategory = songCategoryOptions.find((category) => category.id === selectedSongCategoryId) ?? songCategoryOptions[0];
+    const activeSongSlide = songForm.slides.find((slide) => slide.id === activeSongSlideId) ?? songForm.slides[0] ?? null;
+    const queuedSongGroups = useMemo<QueuedSongGroup[]>(() => {
+        const sessionIndexById = new Map(sessionItems.map((item, index) => [item.id, index]));
+
+        return songs
+            .map((song) => {
+                const queuedSlides = buildSongSlideItems(song)
+                    .map((slide) => sessionItems.find((item) => item.id === slide.id) ?? null)
+                    .filter((item): item is SlideItem => item !== null);
+
+                if (queuedSlides.length === 0) {
+                    return null;
+                }
+
+                return {
+                    song,
+                    slides: queuedSlides,
+                    firstSessionIndex: Math.min(...queuedSlides.map((slide) => sessionIndexById.get(slide.id) ?? Number.MAX_SAFE_INTEGER)),
+                } satisfies QueuedSongGroup;
+            })
+            .filter((group): group is QueuedSongGroup => group !== null)
+            .sort((left, right) => left.firstSessionIndex - right.firstSessionIndex);
+    }, [sessionItems, songs]);
+    const queuedSongGroupBySlideId = useMemo(() => {
+        const lookup = new Map<string, QueuedSongGroup>();
+
+        queuedSongGroups.forEach((group) => {
+            group.slides.forEach((slide) => {
+                lookup.set(slide.id, group);
+            });
+        });
+
+        return lookup;
+    }, [queuedSongGroups]);
+    const activeWorkspaceSongGroup = queuedSongGroups.find((group) => group.song.id === selectedWorkspaceSongId) ?? queuedSongGroups[0] ?? null;
+    const scheduleEntries = useMemo<ScheduleEntry[]>(() => {
+        const entries: ScheduleEntry[] = [];
+
+        for (let index = 0; index < sessionItems.length; index += 1) {
+            const item = sessionItems[index];
+
+            if (isSongSlideItem(item)) {
+                const queuedSongGroup = queuedSongGroupBySlideId.get(item.id);
+                if (queuedSongGroup) {
+                    const groupedIds: string[] = [item.id];
+                    let nextIndex = index + 1;
+
+                    while (nextIndex < sessionItems.length) {
+                        const nextItem = sessionItems[nextIndex];
+                        const nextGroup = queuedSongGroupBySlideId.get(nextItem.id);
+
+                        if (!nextGroup || nextGroup.song.id !== queuedSongGroup.song.id) {
+                            break;
+                        }
+
+                        groupedIds.push(nextItem.id);
+                        nextIndex += 1;
+                    }
+
+                    entries.push({
+                        key: `song-entry-${queuedSongGroup.song.id}-${index}`,
+                        representativeItem: item,
+                        label: queuedSongGroup.song.title,
+                        itemIds: groupedIds,
+                        kind: 'song',
+                        contentType: 'song',
+                        badgeLabel: 'Song',
+                        subtitle: queuedSongGroup.song.keySignature?.trim() || 'Song block',
+                        detail: `${groupedIds.length} slide${groupedIds.length === 1 ? '' : 's'}`,
+                        previewText: compactPreviewText(item.text),
+                        itemCount: groupedIds.length,
+                        songId: queuedSongGroup.song.id,
+                    });
+
+                    index = nextIndex - 1;
+                    continue;
+                }
+            }
+
+            const contentType = getScheduleEntryType(item);
+            const verseCount = item.segments?.length ?? 1;
+
+            entries.push({
+                key: item.id,
+                representativeItem: item,
+                label: formatSlideReference(item),
+                itemIds: [item.id],
+                kind: 'slide',
+                contentType,
+                badgeLabel: contentType === 'presentation' ? 'Presentation' : 'Scripture',
+                subtitle: item.translationShortName?.trim() || (contentType === 'presentation' ? 'Presentation' : 'Bible passage'),
+                detail: contentType === 'presentation' ? '1 slide' : `${verseCount} verse${verseCount === 1 ? '' : 's'}`,
+                previewText: compactPreviewText(item.text),
+                itemCount: 1,
+            });
+        }
+
+        return entries;
+    }, [queuedSongGroupBySlideId, sessionItems]);
 
     useEffect(() => {
         translationsRef.current = translations;
@@ -613,12 +860,12 @@ export default function ControlPanel() {
             sessionItems: buildStableSignature(sessionItems),
             translations: buildStableSignature(translations),
             settings: buildStableSignature(buildSettingsPayload(appSettings, activeTranslationId, resTab)),
-            songs: buildStableSignature(songs),
+            songs: buildStableSignature({ categories: songCategories, songs }),
             mediaItems: buildStableSignature(mediaItems),
             themes: buildStableSignature(themes),
             presentations: buildStableSignature(presentations),
         };
-    }, [activeTranslationId, appSettings, mediaItems, presentations, resTab, sessionItems, songs, themes, translations, user?.uid]);
+    }, [activeTranslationId, appSettings, mediaItems, presentations, resTab, sessionItems, songCategories, songs, themes, translations, user?.uid]);
 
     const applyWorkspaceData = useCallback((workspace: Awaited<ReturnType<typeof loadUserWorkspace>>) => {
         const nextSettings = {
@@ -627,7 +874,7 @@ export default function ControlPanel() {
         } satisfies AppSettings;
 
         const nextSessionItemsSignature = buildStableSignature(workspace.sessionItems);
-        const nextSongsSignature = buildStableSignature(workspace.songs);
+        const nextSongsSignature = buildStableSignature({ categories: workspace.songCategories, songs: workspace.songs });
         const nextMediaItemsSignature = buildStableSignature(workspace.mediaItems);
         const nextThemesSignature = buildStableSignature(workspace.themes);
         const nextPresentationsSignature = buildStableSignature(workspace.presentations);
@@ -648,6 +895,7 @@ export default function ControlPanel() {
         if (!dirtyPayloadsRef.current.songs || nextSongsSignature === localPayloadSignaturesRef.current.songs) {
             syncedPayloadSignaturesRef.current.songs = nextSongsSignature;
             dirtyPayloadsRef.current.songs = false;
+            setSongCategories(workspace.songCategories);
             setSongs(workspace.songs);
         }
 
@@ -819,13 +1067,13 @@ export default function ControlPanel() {
                 translationsReady = true;
                 markHydrated();
                 setWorkspaceStatus(
-                        reason === 'fallback'
+                    reason === 'fallback'
                         ? 'Your content is ready. Some updates may take a moment to appear.'
                         : 'Your content is ready.',
-                    );
+                );
             } catch (error) {
-                    console.warn('Unable to load the cloud workspace.', error);
-                    setWorkspaceStatus('We could not load your content right now. Please try again.');
+                console.warn('Unable to load the cloud workspace.', error);
+                setWorkspaceStatus('We could not load your content right now. Please try again.');
             }
         };
 
@@ -883,6 +1131,48 @@ export default function ControlPanel() {
             setActiveTranslationId(nextActiveTranslationId);
         }
     }, [activeTranslationId, appSettings.activeTranslationId, translations]);
+
+    useEffect(() => {
+        if (selectedSongCategoryId === ALL_SONGS_CATEGORY_ID) {
+            return;
+        }
+
+        if (!songCategories.some((category) => category.id === selectedSongCategoryId)) {
+            setSelectedSongCategoryId(ALL_SONGS_CATEGORY_ID);
+        }
+    }, [selectedSongCategoryId, songCategories]);
+
+    useEffect(() => {
+        if (queuedSongGroups.length === 0) {
+            if (selectedWorkspaceSongId !== null) {
+                setSelectedWorkspaceSongId(null);
+            }
+            return;
+        }
+
+        if (!selectedWorkspaceSongId || !queuedSongGroups.some((group) => group.song.id === selectedWorkspaceSongId)) {
+            setSelectedWorkspaceSongId(queuedSongGroups[0].song.id);
+        }
+    }, [queuedSongGroups, selectedWorkspaceSongId]);
+
+    useEffect(() => {
+        if (!isSongEditorOpen) {
+            return;
+        }
+
+        if (!activeSongSlideId || !songForm.slides.some((slide) => slide.id === activeSongSlideId)) {
+            setActiveSongSlideId(songForm.slides[0]?.id ?? null);
+        }
+    }, [activeSongSlideId, isSongEditorOpen, songForm.slides]);
+
+    useEffect(() => {
+        if (!isSongEditorOpen || !activeSongSlide) {
+            return;
+        }
+
+        const draftSong = buildSongDraftItem(songForm, selectedSongId ?? 'draft-song');
+        setPreviewItem(buildSongSlideItem(draftSong, activeSongSlide.id));
+    }, [activeSongSlide, isSongEditorOpen, selectedSongId, songForm]);
 
     const handlePersistenceError = useCallback((error: unknown, defaultMessage: string, statusSetter?: (message: string) => void) => {
         if (isQuotaExceededError(error)) {
@@ -957,12 +1247,12 @@ export default function ControlPanel() {
         }
 
         if (dirtyPayloadsRef.current.songs) {
-            const nextSignature = buildStableSignature(songs);
+            const nextSignature = buildStableSignature({ categories: songCategories, songs });
             if (syncedPayloadSignaturesRef.current.songs === nextSignature) {
                 dirtyPayloadsRef.current.songs = false;
             } else {
                 pendingWrites.push((async () => {
-                    await saveSongs(user.uid, songs);
+                    await saveSongs(user.uid, songs, songCategories);
                     syncedPayloadSignaturesRef.current.songs = nextSignature;
                     dirtyPayloadsRef.current.songs = false;
                 })().catch((err) => {
@@ -1027,7 +1317,7 @@ export default function ControlPanel() {
         if (pendingWrites.length > 0) {
             await Promise.all(pendingWrites);
         }
-    }, [activeTranslationId, appSettings, handlePersistenceError, mediaItems, presentations, resTab, sessionItems, songs, themes, translations, user]);
+    }, [activeTranslationId, appSettings, handlePersistenceError, mediaItems, presentations, resTab, sessionItems, songCategories, songs, themes, translations, user]);
 
     useEffect(() => {
         if (!user || !cloudHydratedRef.current || writesPausedRef.current) {
@@ -1150,7 +1440,7 @@ export default function ControlPanel() {
             return;
         }
 
-        const nextSignature = buildStableSignature(songs);
+        const nextSignature = buildStableSignature({ categories: songCategories, songs });
         if (syncedPayloadSignaturesRef.current.songs === nextSignature) {
             dirtyPayloadsRef.current.songs = false;
             return;
@@ -1158,7 +1448,7 @@ export default function ControlPanel() {
 
         const persistSongs = async () => {
             try {
-                await saveSongs(user.uid, songs);
+                await saveSongs(user.uid, songs, songCategories);
                 syncedPayloadSignaturesRef.current.songs = nextSignature;
                 dirtyPayloadsRef.current.songs = false;
             } catch (err) {
@@ -1168,7 +1458,7 @@ export default function ControlPanel() {
         };
 
         void persistSongs();
-    }, [handlePersistenceError, songs, user]);
+    }, [handlePersistenceError, songCategories, songs, user]);
 
     useEffect(() => {
         if (!user || !cloudHydratedRef.current || writesPausedRef.current) {
@@ -1371,44 +1661,91 @@ export default function ControlPanel() {
         void sendItemToLive(item);
     };
 
+    const handleScheduleItemSelect = (item: SlideItem) => {
+        if (isSongSlideItem(item)) {
+            const queuedSongGroup = queuedSongGroupBySlideId.get(item.id);
+            if (queuedSongGroup) {
+                setSelectedWorkspaceSongId(queuedSongGroup.song.id);
+            }
+        }
+
+        sendToPreview(item);
+    };
+
+    const handleScheduleEntrySelect = (entry: ScheduleEntry) => {
+        handleScheduleItemSelect(entry.representativeItem);
+    };
+
+    const moveScheduleEntry = (entry: ScheduleEntry, direction: 'up' | 'down') => {
+        dirtyPayloadsRef.current.sessionItems = true;
+        setSessionItems((currentItems) => {
+            const startIndex = currentItems.findIndex((item) => item.id === entry.itemIds[0]);
+            if (startIndex === -1) {
+                return currentItems;
+            }
+
+            const endIndex = startIndex + entry.itemIds.length - 1;
+            const block = currentItems.slice(startIndex, endIndex + 1);
+            const remainingItems = [...currentItems];
+            remainingItems.splice(startIndex, block.length);
+
+            if (direction === 'up') {
+                if (startIndex === 0) {
+                    return currentItems;
+                }
+
+                remainingItems.splice(startIndex - 1, 0, ...block);
+                return remainingItems;
+            }
+
+            if (endIndex >= currentItems.length - 1) {
+                return currentItems;
+            }
+
+            remainingItems.splice(startIndex + 1, 0, ...block);
+            return remainingItems;
+        });
+    };
+
+    const removeScheduleEntry = (entry: ScheduleEntry, event: MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        dirtyPayloadsRef.current.sessionItems = true;
+        setSessionItems((currentItems) => currentItems.filter((item) => !entry.itemIds.includes(item.id)));
+
+        if (previewItem && entry.itemIds.includes(previewItem.id)) {
+            setPreviewItem(null);
+        }
+
+        if (liveItem && entry.itemIds.includes(liveItem.id)) {
+            setLiveItem(null);
+        }
+    };
+
+    const handleWorkspaceSlideSelect = (item: SlideItem) => {
+        if (isLiveOffline) {
+            sendToPreview(item);
+            return;
+        }
+
+        void sendItemToLive(item);
+    };
+
+    const handleWorkspaceSlideActivate = (item: SlideItem) => {
+        void sendItemToLive(item);
+    };
+
     const addToSession = (item: SlideItem) => {
         dirtyPayloadsRef.current.sessionItems = true;
         setSessionItems((currentItems) => (currentItems.some((currentItem) => currentItem.id === item.id) ? currentItems : [...currentItems, item]));
     };
 
-    const moveSessionItem = (itemId: string, direction: 'up' | 'down') => {
-        dirtyPayloadsRef.current.sessionItems = true;
-        setSessionItems((currentItems) => {
-            const currentIndex = currentItems.findIndex((item) => item.id === itemId);
-            if (currentIndex === -1) {
-                return currentItems;
-            }
-
-            const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-            if (targetIndex < 0 || targetIndex >= currentItems.length) {
-                return currentItems;
-            }
-
-            const nextItems = [...currentItems];
-            const [movedItem] = nextItems.splice(currentIndex, 1);
-            nextItems.splice(targetIndex, 0, movedItem);
-            return nextItems;
-        });
-    };
-
-    const removeFromSession = (id: string, e: MouseEvent<HTMLButtonElement>) => {
-        e.stopPropagation();
-        dirtyPayloadsRef.current.sessionItems = true;
-        setSessionItems(sessionItems.filter(i => i.id !== id));
-        if (previewItem?.id === id) setPreviewItem(null);
-    };
-
     const sendItemToLive = async (item: SlideItem) => {
         const nextPresentationState: PresentationState = {
-            type: 'verse',
+            type: isSongSlideItem(item) || item.kind === 'presentation' ? 'song' : 'verse',
             text: item.text,
-            reference: formatSlideReference(item),
+            reference: isSongSlideItem(item) ? undefined : formatSlideReference(item),
             segments: item.segments,
+            slideStyle: item.slideStyle,
         };
         setPreviewItem(item);
         latestPresentationStateRef.current = nextPresentationState;
@@ -1613,9 +1950,55 @@ export default function ControlPanel() {
         }));
     };
 
+    const startSongCreation = useCallback((categoryId: string = selectedSongCategoryId) => {
+        setSelectedSongId(null);
+        setIsSongEditorOpen(true);
+        const nextDraft = createSongDraft(categoryId === ALL_SONGS_CATEGORY_ID ? '' : categoryId);
+        setSongForm(nextDraft);
+        setActiveSongSlideId(nextDraft.slides[0]?.id ?? null);
+    }, [selectedSongCategoryId]);
+
+    const createSongCategory = () => {
+        setCategoryNameDraft('');
+        setIsCategoryModalOpen(true);
+    };
+
+    const submitSongCategory = (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        const name = categoryNameDraft.trim();
+
+        if (!name) {
+            return;
+        }
+
+        const duplicateCategory = songCategories.some((category) => category.name.toLowerCase() === name.toLowerCase());
+        if (duplicateCategory) {
+            setWorkspaceStatus('That song category already exists.');
+            return;
+        }
+
+        const nextCategory = {
+            id: createEntityId('song-category'),
+            name,
+        } satisfies SongCategory;
+
+        dirtyPayloadsRef.current.songs = true;
+        setSongCategories((currentCategories) => [...currentCategories, nextCategory]);
+        setSelectedSongCategoryId(nextCategory.id);
+        setSongForm((currentForm) => ({
+            ...currentForm,
+            categoryId: currentForm.categoryId || nextCategory.id,
+        }));
+        setIsCategoryModalOpen(false);
+        setCategoryNameDraft('');
+        setWorkspaceStatus(`Category created: ${name}.`);
+    };
+
     const resetSongEditor = () => {
         setSelectedSongId(null);
-        setSongForm({ title: '', author: '', copyright: '', lyrics: '', keySignature: '', tags: '', notes: '' });
+        setIsSongEditorOpen(false);
+        setActiveSongSlideId(null);
+        setSongForm(createSongDraft());
     };
 
     const resetMediaEditor = () => {
@@ -1634,17 +2017,22 @@ export default function ControlPanel() {
     };
 
     const editSong = (song: SongItem) => {
+        const normalizedSlides = normalizeSongSlides(song);
         setSelectedSongId(song.id);
+        setIsSongEditorOpen(true);
         setSongForm({
             title: song.title,
             author: song.author,
             copyright: song.copyright,
-            lyrics: song.lyrics,
+            categoryId: song.categoryId ?? '',
             keySignature: song.keySignature ?? '',
             tags: song.tags ?? '',
             notes: song.notes ?? '',
+            slides: normalizedSlides,
         });
-        sendToPreview(buildSongSlideItem(song));
+        setActiveSongSlideId(normalizedSlides[0]?.id ?? null);
+        setSelectedSongCategoryId(song.categoryId ?? ALL_SONGS_CATEGORY_ID);
+        sendToPreview(buildSongSlideItem({ ...song, slides: normalizedSlides }, normalizedSlides[0]?.id ?? null));
     };
 
     const editMediaItem = (item: MediaItem) => {
@@ -1694,6 +2082,17 @@ export default function ControlPanel() {
         if (nextTab !== 'Scriptures') {
             setCommittedScriptureQuery('');
             lastSubmittedSearchRef.current = '';
+        }
+
+        if (nextTab !== 'Songs') {
+            setIsSongEditorOpen(false);
+            setIsCategoryModalOpen(false);
+        }
+    };
+
+    const handleToolbarNew = () => {
+        if (resTab === 'Songs') {
+            startSongCreation();
         }
     };
 
@@ -1797,22 +2196,14 @@ export default function ControlPanel() {
             return;
         }
 
-        const nextSong = {
-            id: selectedSongId ?? createEntityId('song'),
-            title,
-            author: songForm.author.trim(),
-            copyright: songForm.copyright.trim(),
-            lyrics: songForm.lyrics.trim(),
-            keySignature: songForm.keySignature.trim() || undefined,
-            tags: songForm.tags.trim() || undefined,
-            notes: songForm.notes.trim() || undefined,
-        } satisfies SongItem;
+        const nextSong = buildSongDraftItem({ ...songForm, title }, selectedSongId ?? createEntityId('song'));
 
         dirtyPayloadsRef.current.songs = true;
         setSongs((currentSongs) => selectedSongId
             ? currentSongs.map((song) => song.id === selectedSongId ? nextSong : song)
             : [nextSong, ...currentSongs]);
-        sendToPreview(buildSongSlideItem(nextSong));
+        const defaultSlideId = nextSong.slides?.[0]?.id ?? null;
+        sendToPreview(buildSongSlideItem(nextSong, defaultSlideId));
         resetSongEditor();
         setWorkspaceStatus(selectedSongId ? 'Song updated.' : 'Song saved.');
     };
@@ -1820,6 +2211,60 @@ export default function ControlPanel() {
     const removeSong = (songId: string) => {
         dirtyPayloadsRef.current.songs = true;
         setSongs((currentSongs) => currentSongs.filter((song) => song.id !== songId));
+        if (selectedSongId === songId) {
+            resetSongEditor();
+        }
+    };
+
+    const updateSongDraftField = <Key extends keyof SongEditorDraft>(field: Key, value: SongEditorDraft[Key]) => {
+        setSongForm((currentForm) => ({
+            ...currentForm,
+            [field]: value,
+        }));
+    };
+
+    const updateSongSlide = (slideId: string, patch: Partial<SongSlide>) => {
+        setSongForm((currentForm) => ({
+            ...currentForm,
+            slides: currentForm.slides.map((slide) => slide.id === slideId ? { ...slide, ...patch } : slide),
+        }));
+    };
+
+    const updateSongSlideStyle = (slideId: string, patch: Partial<SlideTextStyle>) => {
+        setSongForm((currentForm) => ({
+            ...currentForm,
+            slides: currentForm.slides.map((slide) => slide.id === slideId ? { ...slide, style: { ...mergeSongSlideStyle(slide.style), ...patch } } : slide),
+        }));
+    };
+
+    const addSongSlide = () => {
+        setSongForm((currentForm) => {
+            const nextSlide = createSongSlide({}, currentForm.slides.length);
+            setActiveSongSlideId(nextSlide.id);
+
+            return {
+                ...currentForm,
+                slides: [...currentForm.slides, nextSlide],
+            };
+        });
+    };
+
+    const removeSongSlide = (slideId: string) => {
+        setSongForm((currentForm) => {
+            if (currentForm.slides.length <= 1) {
+                return currentForm;
+            }
+
+            const nextSlides = currentForm.slides.filter((slide) => slide.id !== slideId);
+            if (activeSongSlideId === slideId) {
+                setActiveSongSlideId(nextSlides[0]?.id ?? null);
+            }
+
+            return {
+                ...currentForm,
+                slides: nextSlides,
+            };
+        });
     };
 
     const addMediaItem = (event: FormEvent<HTMLFormElement>) => {
@@ -1928,7 +2373,8 @@ export default function ControlPanel() {
     };
 
     const queueSong = (song: SongItem) => {
-        addToSession(buildSongSlideItem(song));
+        buildSongSlideItems(song).forEach((slideItem) => addToSession(slideItem));
+        setSelectedWorkspaceSongId(song.id);
     };
 
     const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
@@ -1980,7 +2426,7 @@ export default function ControlPanel() {
         resTab === 'Scriptures'
             ? previewItem?.text ?? 'Select an item to preview'
             : resTab === 'Songs'
-                ? selectedSong?.lyrics || filteredSongs[0]?.lyrics || 'Create a song to save it to your account.'
+                ? getSongPreviewText(selectedSong) || getSongPreviewText(filteredSongs[0] ?? null) || 'Create a song to save it to your account.'
                 : resTab === 'Media'
                     ? selectedMediaItem?.notes || selectedMediaItem?.source || filteredMediaItems[0]?.notes || filteredMediaItems[0]?.source || 'Create a media item to save it to your account.'
                     : resTab === 'Presentations'
@@ -2004,26 +2450,141 @@ export default function ControlPanel() {
                             ? `${filteredThemes.length} theme${filteredThemes.length === 1 ? '' : 's'} synced`
                             : 'Your settings are saved to your account';
 
-    const renderMonitorContent = (item: SlideItem) => (
-        <>
-            <div className="screen-bg"></div>
-            <div className="screen-content scripture-monitor-content">
-                <div className="screen-text projector-text scripture-monitor-text">
-                    {item.segments && item.segments.length > 0 ? (
-                        item.segments.map((segment) => (
-                            <span key={`${item.id}-${segment.verseNumber}`} className="projector-verse-segment">
-                                <span className="projector-verse-number">{segment.verseNumber}</span>
-                                <span>{segment.text}</span>
-                            </span>
-                        ))
-                    ) : (
-                        item.text
-                    )}
+    const renderMonitorContent = (item: SlideItem) => {
+        const monitorStyles = buildSongMonitorStyles(item.slideStyle);
+        const shouldShowReference = !isSongSlideItem(item);
+
+        return (
+            <>
+                <div className="screen-bg"></div>
+                <div className={`screen-content scripture-monitor-content ${item.kind === 'song' ? 'song-monitor-content' : ''}`} style={item.kind === 'song' ? monitorStyles.contentStyle : undefined}>
+                    <div className="screen-text projector-text scripture-monitor-text" style={item.kind === 'song' ? monitorStyles.textStyle : undefined}>
+                        {item.segments && item.segments.length > 0 ? (
+                            item.segments.map((segment) => (
+                                <span key={`${item.id}-${segment.verseNumber}`} className="projector-verse-segment">
+                                    <span className="projector-verse-number">{segment.verseNumber}</span>
+                                    <span>{segment.text}</span>
+                                </span>
+                            ))
+                        ) : (
+                            item.text
+                        )}
+                    </div>
+                    {shouldShowReference && <div className="projector-reference scripture-monitor-reference">{formatSlideReference(item)}</div>}
                 </div>
-                <div className="projector-reference scripture-monitor-reference">{formatSlideReference(item)}</div>
+            </>
+        );
+    };
+
+    const renderResourcePreviewContent = () => {
+        if (resTab === 'Scriptures') {
+            return previewItem ? renderMonitorContent(previewItem) : <div className="placeholder-text">Select an item</div>;
+        }
+
+        if (resTab === 'Songs') {
+            const previewSong = selectedSong ?? filteredSongs[0] ?? null;
+
+            if (!previewSong) {
+                return <div className="resource-preview-empty">Create a song to start building your library.</div>;
+            }
+
+            const previewSlide = buildSongSlideItem(previewSong);
+            const previewStyles = buildWorkspaceSlideStyles(previewSlide.slideStyle);
+
+            return (
+                <div className="resource-preview-card resource-preview-card-song">
+                    <div className="resource-preview-kicker">Song Preview</div>
+                    <div className="resource-preview-title">{previewSong.title}</div>
+                    <div className="resource-preview-subtitle">{previewSong.keySignature?.trim() || 'Song library item'}</div>
+                    <div className="resource-preview-song-stage" style={previewStyles.contentStyle}>
+                        <div className="resource-preview-song-text" style={previewStyles.textStyle}>{previewSlide.text}</div>
+                    </div>
+                </div>
+            );
+        }
+
+        if (resTab === 'Media') {
+            const previewMedia = selectedMediaItem ?? filteredMediaItems[0] ?? null;
+
+            if (!previewMedia) {
+                return <div className="resource-preview-empty">Add media to preview images, videos, and source details here.</div>;
+            }
+
+            const mediaDescriptor = `${previewMedia.type} ${previewMedia.source} ${previewMedia.thumbnailUrl ?? ''}`.toLowerCase();
+            const isVideo = /(video|mp4|mov|avi|wmv|webm|mkv)/.test(mediaDescriptor);
+            const isImage = !isVideo && /(image|png|jpg|jpeg|gif|webp|svg|bmp)/.test(mediaDescriptor);
+            const mediaSource = previewMedia.thumbnailUrl || previewMedia.source;
+
+            return (
+                <div className="resource-preview-card resource-preview-card-media">
+                    <div className="resource-preview-kicker">Media Preview</div>
+                    <div className="resource-preview-title">{previewMedia.title}</div>
+                    <div className="resource-preview-subtitle">{previewMedia.type || 'Media item'}</div>
+                    <div className="resource-preview-media-stage">
+                        {mediaSource && isImage ? (
+                            <img className="resource-preview-media-image" src={mediaSource} alt={previewMedia.title} />
+                        ) : mediaSource && isVideo ? (
+                            <video className="resource-preview-media-video" controls muted preload="metadata" poster={previewMedia.thumbnailUrl || undefined}>
+                                <source src={previewMedia.source} />
+                            </video>
+                        ) : (
+                            <div className="resource-preview-media-placeholder">
+                                <strong>{previewMedia.type || 'Media'}</strong>
+                                <span>{previewMedia.source || 'No source path yet'}</span>
+                            </div>
+                        )}
+                    </div>
+                    <div className="resource-preview-caption">{compactPreviewText(previewMedia.notes || previewMedia.source || previewMedia.duration, 180)}</div>
+                </div>
+            );
+        }
+
+        if (resTab === 'Presentations') {
+            const previewPresentation = selectedPresentation ?? filteredPresentationItems[0] ?? null;
+
+            if (!previewPresentation) {
+                return <div className="resource-preview-empty">Create a presentation to preview it here.</div>;
+            }
+
+            return (
+                <div className="resource-preview-card resource-preview-card-presentation">
+                    <div className="resource-preview-kicker">Presentation Preview</div>
+                    <div className="resource-preview-title">{previewPresentation.title}</div>
+                    <div className="resource-preview-subtitle">{previewPresentation.reference || previewPresentation.category}</div>
+                    <div className="resource-preview-presentation-stage" style={{ background: previewPresentation.background }}>
+                        <div className="resource-preview-presentation-text">{previewPresentation.content}</div>
+                    </div>
+                </div>
+            );
+        }
+
+        if (resTab === 'Themes') {
+            const previewTheme = selectedTheme ?? filteredThemes[0] ?? null;
+
+            if (!previewTheme) {
+                return <div className="resource-preview-empty">Create a theme to preview its colors and typography here.</div>;
+            }
+
+            return (
+                <div className="resource-preview-card resource-preview-card-theme">
+                    <div className="resource-preview-kicker">Theme Preview</div>
+                    <div className="resource-preview-title">{previewTheme.name}</div>
+                    <div className="resource-preview-theme-stage" style={{ background: previewTheme.background, color: previewTheme.textColor, fontFamily: previewTheme.fontFamily || 'Segoe UI' }}>
+                        <div className="resource-preview-theme-accent" style={{ background: previewTheme.accentColor }}></div>
+                        <div className="resource-preview-theme-text" style={{ fontSize: `${Math.max(24, Math.min(72, previewTheme.textSize ?? 48))}px` }}>Grace and peace be with you</div>
+                    </div>
+                </div>
+            );
+        }
+
+        return (
+            <div className="resource-preview-card resource-preview-card-settings">
+                <div className="resource-preview-kicker">Settings</div>
+                <div className="resource-preview-title">Workspace Defaults</div>
+                <div className="resource-preview-caption">{resourcePreviewText}</div>
             </div>
-        </>
-    );
+        );
+    };
 
     return (
         <div className="control-panel">
@@ -2053,7 +2614,7 @@ export default function ControlPanel() {
             {/* 2. Toolbar */}
             <div className="toolbar">
                 <div className="toolbar-section">
-                    <button className="tool-btn" title="Coming Soon"><FilePlus size={20} />New</button>
+                    <button className="tool-btn" onClick={handleToolbarNew} title={resTab === 'Songs' ? 'Add a song' : 'Coming Soon'}><FilePlus size={20} />New</button>
                     <button className="tool-btn" title="Coming Soon"><FolderOpen size={20} />Open</button>
                     <button className="tool-btn" title="Coming Soon"><Save size={20} />Save</button>
                     <button className="tool-btn" title="Coming Soon"><Store size={20} />Store</button>
@@ -2132,58 +2693,96 @@ export default function ControlPanel() {
                                             <div className="schedule-subpane">
                                                 <div className="schedule-subpane-header">Schedule</div>
                                                 <div className="schedule-subpane-body schedule-list">
-                                                    {sessionItems.length === 0 ? (
-                                                        <div style={{ color: '#666', padding: '15px', fontSize: '12px', textAlign: 'center' }}>
+                                                    {scheduleEntries.length === 0 ? (
+                                                        <div className="schedule-empty-state">
                                                             Drag items here to build a schedule, <br />or add from the Resources below.
                                                         </div>
                                                     ) : (
-                                                        sessionItems.map(item => (
-                                                            <div key={item.id}
-                                                                className={`schedule-item ${previewItem?.id === item.id ? 'active' : ''}`}
-                                                                onClick={() => sendToPreview(item)}
-                                                                onDoubleClick={() => sendItemToLive(item)}
-                                                                tabIndex={0}
-                                                                onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter') void sendItemToLive(item); }}
-                                                            >
-                                                                <span style={{ fontWeight: 'bold' }}>{formatSlideReference(item)}</span>
-                                                                <div className="schedule-item-actions">
-                                                                    <button onClick={() => moveSessionItem(item.id, 'up')} className="pane-action-btn" title="Move up" type="button">Up</button>
-                                                                    <button onClick={() => moveSessionItem(item.id, 'down')} className="pane-action-btn" title="Move down" type="button">Down</button>
-                                                                    <button onClick={(e) => removeFromSession(item.id, e)} className="pane-action-btn" title="Remove" type="button">
-                                                                        <XCircle size={14} />
-                                                                    </button>
+                                                        scheduleEntries.map((entry, index) => {
+                                                            const isPreviewingEntry = previewItem ? entry.itemIds.includes(previewItem.id) : false;
+                                                            const isLiveScheduleEntry = liveItem ? entry.itemIds.includes(liveItem.id) : false;
+
+                                                            return (
+                                                                <div
+                                                                    key={entry.key}
+                                                                    className={`schedule-item schedule-item-${entry.contentType} ${isPreviewingEntry ? 'active previewing' : ''} ${isLiveScheduleEntry && !isLiveOffline ? 'live-now' : ''}`}
+                                                                    onClick={() => handleScheduleEntrySelect(entry)}
+                                                                    onDoubleClick={() => sendItemToLive(entry.representativeItem)}
+                                                                    tabIndex={0}
+                                                                    onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter') void sendItemToLive(entry.representativeItem); }}
+                                                                >
+                                                                    <div className="schedule-item-main">
+                                                                        <div className="schedule-item-topline">
+                                                                            <span className="schedule-item-order">{String(index + 1).padStart(2, '0')}</span>
+                                                                            <span className="schedule-item-kind">{entry.badgeLabel}</span>
+                                                                            <span className="schedule-item-detail">{entry.detail}</span>
+                                                                            {isPreviewingEntry && <span className="schedule-item-state schedule-item-state-preview">Preview</span>}
+                                                                            {isLiveScheduleEntry && !isLiveOffline && <span className="schedule-item-state schedule-item-state-live">Live</span>}
+                                                                        </div>
+                                                                        <div className="schedule-item-label">{entry.label}</div>
+                                                                        <div className="schedule-item-meta">
+                                                                            <span>{entry.subtitle}</span>
+                                                                            <span>{entry.previewText}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="schedule-item-actions">
+                                                                        <button onClick={(event) => { event.stopPropagation(); moveScheduleEntry(entry, 'up'); }} className="pane-action-btn" title="Move up" type="button">Up</button>
+                                                                        <button onClick={(event) => { event.stopPropagation(); moveScheduleEntry(entry, 'down'); }} className="pane-action-btn" title="Move down" type="button">Down</button>
+                                                                        <button onClick={(e) => removeScheduleEntry(entry, e)} className="pane-action-btn" title="Remove" type="button">
+                                                                            <XCircle size={14} />
+                                                                        </button>
+                                                                    </div>
                                                                 </div>
-                                                            </div>
-                                                        ))
+                                                            );
+                                                        })
                                                     )}
                                                 </div>
                                             </div>
                                         </ResizablePanelGroup>
                                     ) : (
                                         <div className="schedule-list">
-                                            {sessionItems.length === 0 ? (
-                                                <div style={{ color: '#666', padding: '15px', fontSize: '12px', textAlign: 'center' }}>
+                                            {scheduleEntries.length === 0 ? (
+                                                <div className="schedule-empty-state">
                                                     Drag items here to build a schedule, <br />or add from the Resources below.
                                                 </div>
                                             ) : (
-                                                sessionItems.map(item => (
-                                                    <div key={item.id}
-                                                        className={`schedule-item ${previewItem?.id === item.id ? 'active' : ''}`}
-                                                        onClick={() => sendToPreview(item)}
-                                                        onDoubleClick={() => sendItemToLive(item)}
-                                                        tabIndex={0}
-                                                        onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter') void sendItemToLive(item); }}
-                                                    >
-                                                        <span style={{ fontWeight: 'bold' }}>{formatSlideReference(item)}</span>
-                                                        <div className="schedule-item-actions">
-                                                            <button onClick={() => moveSessionItem(item.id, 'up')} className="pane-action-btn" title="Move up" type="button">Up</button>
-                                                            <button onClick={() => moveSessionItem(item.id, 'down')} className="pane-action-btn" title="Move down" type="button">Down</button>
-                                                            <button onClick={(e) => removeFromSession(item.id, e)} className="pane-action-btn" title="Remove" type="button">
-                                                                <XCircle size={14} />
-                                                            </button>
+                                                scheduleEntries.map((entry, index) => {
+                                                    const isPreviewingEntry = previewItem ? entry.itemIds.includes(previewItem.id) : false;
+                                                    const isLiveScheduleEntry = liveItem ? entry.itemIds.includes(liveItem.id) : false;
+
+                                                    return (
+                                                        <div
+                                                            key={entry.key}
+                                                            className={`schedule-item schedule-item-${entry.contentType} ${isPreviewingEntry ? 'active previewing' : ''} ${isLiveScheduleEntry && !isLiveOffline ? 'live-now' : ''}`}
+                                                            onClick={() => handleScheduleEntrySelect(entry)}
+                                                            onDoubleClick={() => sendItemToLive(entry.representativeItem)}
+                                                            tabIndex={0}
+                                                            onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter') void sendItemToLive(entry.representativeItem); }}
+                                                        >
+                                                            <div className="schedule-item-main">
+                                                                <div className="schedule-item-topline">
+                                                                    <span className="schedule-item-order">{String(index + 1).padStart(2, '0')}</span>
+                                                                    <span className="schedule-item-kind">{entry.badgeLabel}</span>
+                                                                    <span className="schedule-item-detail">{entry.detail}</span>
+                                                                    {isPreviewingEntry && <span className="schedule-item-state schedule-item-state-preview">Preview</span>}
+                                                                    {isLiveScheduleEntry && !isLiveOffline && <span className="schedule-item-state schedule-item-state-live">Live</span>}
+                                                                </div>
+                                                                <div className="schedule-item-label">{entry.label}</div>
+                                                                <div className="schedule-item-meta">
+                                                                    <span>{entry.subtitle}</span>
+                                                                    <span>{entry.previewText}</span>
+                                                                </div>
+                                                            </div>
+                                                            <div className="schedule-item-actions">
+                                                                <button onClick={(event) => { event.stopPropagation(); moveScheduleEntry(entry, 'up'); }} className="pane-action-btn" title="Move up" type="button">Up</button>
+                                                                <button onClick={(event) => { event.stopPropagation(); moveScheduleEntry(entry, 'down'); }} className="pane-action-btn" title="Move down" type="button">Down</button>
+                                                                <button onClick={(e) => removeScheduleEntry(entry, e)} className="pane-action-btn" title="Remove" type="button">
+                                                                    <XCircle size={14} />
+                                                                </button>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                ))
+                                                    );
+                                                })
                                             )}
                                         </div>
                                     )}
@@ -2194,15 +2793,46 @@ export default function ControlPanel() {
                             <div className="pane">
                                 <div className="pane-header">Live Workspace</div>
                                 <div className="pane-content slides-grid">
+                                    {activeWorkspaceSongGroup ? (
+                                        activeWorkspaceSongGroup.slides.map((slide) => {
+                                            const workspaceSlideStyles = buildWorkspaceSlideStyles(slide.slideStyle);
 
-                                    <div className="slide-card slide-card-info">
-                                        <div className="slide-text">
-                                            <div style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '8px', color: '#888' }}>Coming Soon</div>
-                                            Live Workspace will display slides for songs, media, and presentations.
-                                            <br /><br />
-                                            Add scriptures to the Schedule using the "Add" button in the Resource area (bottom) to use them.
+                                            return (
+                                                <div
+                                                    key={slide.id}
+                                                    className={`slide-card song-workspace-card ${previewItem?.id === slide.id ? 'previewing' : ''} ${liveItem?.id === slide.id && !isLiveOffline ? 'live-now' : ''}`}
+                                                    onClick={() => handleWorkspaceSlideSelect(slide)}
+                                                    onDoubleClick={() => handleWorkspaceSlideActivate(slide)}
+                                                    tabIndex={0}
+                                                    onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                                                        if (event.key === 'Enter') {
+                                                            event.preventDefault();
+                                                            handleWorkspaceSlideActivate(slide);
+                                                        }
+                                                    }}
+                                                >
+                                                    <div className="slide-badge badge-preview">{previewItem?.id === slide.id ? 'Preview' : `Slide ${activeWorkspaceSongGroup.slides.findIndex((item) => item.id === slide.id) + 1}`}</div>
+                                                    {liveItem?.id === slide.id && !isLiveOffline && <div className="slide-badge badge-live">Live</div>}
+                                                    <div className="song-workspace-card-stage" style={workspaceSlideStyles.contentStyle}>
+                                                        <div className="song-workspace-card-text" style={workspaceSlideStyles.textStyle}>{slide.text}</div>
+                                                    </div>
+                                                    <div className="song-workspace-card-footer">
+                                                        <strong>{activeWorkspaceSongGroup.song.title}</strong>
+                                                        <span>{slide.translationShortName ?? 'Slide'}</span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    ) : (
+                                        <div className="slide-card slide-card-info">
+                                            <div className="slide-text">
+                                                <div style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '8px', color: '#888' }}>Live Workspace</div>
+                                                Queue a song, then click it once in the schedule to open all of its slides here.
+                                                <br /><br />
+                                                Click a slide once to change the live slide when projecting, or double-click to start projecting it.
+                                            </div>
                                         </div>
-                                    </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -2336,17 +2966,38 @@ export default function ControlPanel() {
                                             </select>
                                         </div>
                                     )}
+                                    {resTab === 'Songs' && (
+                                        <div className="song-category-actions">
+                                            <button className="translation-btn" onClick={createSongCategory} type="button">New Category</button>
+                                            <button className="translation-btn" onClick={() => startSongCreation()} type="button">New Song</button>
+                                        </div>
+                                    )}
                                 </div>
-                                {resTab !== 'Scriptures' && resTab !== 'Settings' && (
+                                {resTab === 'Songs' && (
+                                    <div className="collections-body song-category-list">
+                                        {songCategoryOptions.map((category) => {
+                                            const songCount = category.id === ALL_SONGS_CATEGORY_ID
+                                                ? songs.length
+                                                : songs.filter((song) => song.categoryId === category.id).length;
+
+                                            return (
+                                                <button
+                                                    key={category.id}
+                                                    className={`collection-item song-category-item ${selectedSongCategoryId === category.id ? 'active' : ''}`}
+                                                    onClick={() => setSelectedSongCategoryId(category.id)}
+                                                    type="button"
+                                                >
+                                                    <span>{category.name}</span>
+                                                    <strong>{songCount}</strong>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                                {resTab !== 'Scriptures' && resTab !== 'Settings' && resTab !== 'Songs' && (
                                     <div className="collections-body">
                                         <div className="collection-item expandable" style={{ background: '#333' }}>
                                             <ChevronDown size={14} className="icon" /> ALL {resTab.toUpperCase()}
-                                        </div>
-                                        <div className="collection-item expandable">
-                                            <ChevronRight size={14} className="icon" /> COLLECTIONS
-                                        </div>
-                                        <div className="collection-item expandable">
-                                            <ChevronRight size={14} className="icon" /> MY COLLECTIONS
                                         </div>
                                     </div>
                                 )}
@@ -2367,25 +3018,49 @@ export default function ControlPanel() {
 
                             {/* Data Items Pane */}
                             <div className="res-items">
-                                {resTab !== 'Settings' && (
+                                {resTab === 'Songs' && (
+                                    <div className="songs-library-header">
+                                        <div>
+                                            <div className="songs-library-label">Category</div>
+                                            <div className="songs-library-title">{selectedSongCategory?.name ?? ALL_SONGS_CATEGORY_NAME}</div>
+                                        </div>
+                                        <button className="songs-library-add" onClick={() => startSongCreation()} type="button">+</button>
+                                    </div>
+                                )}
+                                {resTab !== 'Settings' && resTab !== 'Songs' && (
                                     <div className="datagrid-header">
                                         <div className="datagrid-cell">Title</div>
                                         <div className="datagrid-cell">{resTab === 'Scriptures' ? 'Translation' : resTab === 'Media' ? 'Type/Ref' : 'Author/Ref'}</div>
                                         <div className="datagrid-cell">{resTab === 'Scriptures' ? 'Verse Text' : resTab === 'Themes' ? 'Colors' : 'Details'}</div>
-                                        {(resTab === 'Scriptures' || resTab === 'Songs' || resTab === 'Media' || resTab === 'Themes' || resTab === 'Presentations') && <div className="datagrid-cell datagrid-cell-action">Action</div>}
+                                        {(resTab === 'Scriptures' || resTab === 'Media' || resTab === 'Themes' || resTab === 'Presentations') && <div className="datagrid-cell datagrid-cell-action">Action</div>}
                                     </div>
                                 )}
 
                                 {resTab === 'Songs' && filteredSongs.map(song => (
-                                    <div key={song.id} className={`datagrid-row ${selectedSongId === song.id ? 'active previewing' : ''}`} onClick={() => editSong(song)}>
-                                        <div className="datagrid-cell" style={{ fontWeight: 'bold' }}>{song.title}</div>
-                                        <div className="datagrid-cell">{song.author || song.keySignature || 'Song'}</div>
-                                        <div className="datagrid-cell">{song.copyright || song.tags || song.notes || 'No song details'}</div>
-                                        <div className="datagrid-cell datagrid-cell-action datagrid-action-stack">
-                                            <button className="schedule-add-btn" onClick={(event) => { event.stopPropagation(); editSong(song); }} type="button">Edit</button>
-                                            <button className="schedule-add-btn" onClick={(event) => { event.stopPropagation(); queueSong(song); }} type="button">Queue</button>
-                                            <button className="schedule-add-btn" onClick={(event) => { event.stopPropagation(); void sendItemToLive(buildSongSlideItem(song)); }} type="button">Live</button>
-                                            <button className="schedule-add-btn delete-btn" onClick={(event) => { event.stopPropagation(); removeSong(song.id); }} type="button" title="Delete song">
+                                    <div
+                                        key={song.id}
+                                        className={`datagrid-row datagrid-row-songs song-library-row ${selectedSongId === song.id ? 'active previewing' : ''}`}
+                                        onDoubleClick={() => queueSong(song)}
+                                        tabIndex={0}
+                                        onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                                            if (event.key === 'Enter') {
+                                                event.preventDefault();
+                                                queueSong(song);
+                                            }
+                                        }}
+                                    >
+                                        <div className="datagrid-cell song-row-main">
+                                            <strong>{song.title}</strong>
+                                            <span>
+                                                {songCategories.find((category) => category.id === song.categoryId)?.name ?? 'All Songs'}
+                                                {` • ${normalizeSongSlides(song).length} slide${normalizeSongSlides(song).length === 1 ? '' : 's'}`}
+                                            </span>
+                                        </div>
+                                        <div className="datagrid-cell datagrid-cell-action song-row-actions">
+                                            <button className="song-row-action-btn" onClick={(event) => { event.stopPropagation(); editSong(song); }} type="button">Edit</button>
+                                            <button className="song-row-action-btn" onClick={(event) => { event.stopPropagation(); queueSong(song); }} type="button">Queue</button>
+                                            <button className="song-row-action-btn" onClick={(event) => { event.stopPropagation(); void sendItemToLive(buildSongSlideItem(song)); }} type="button">Live</button>
+                                            <button className="song-row-action-btn song-row-action-btn-delete" onClick={(event) => { event.stopPropagation(); removeSong(song.id); }} type="button" title="Delete song">
                                                 <Trash2 size={14} />
                                             </button>
                                         </div>
@@ -2499,25 +3174,6 @@ export default function ControlPanel() {
                                     </div>
                                 ))}
 
-                                {resTab === 'Songs' && (
-                                    <form className="resource-form" onSubmit={addSong}>
-                                        <div className="resource-form-title">{selectedSongId ? 'Edit Song' : 'Add Song'}</div>
-                                        <div className="resource-grid-form">
-                                            <input placeholder="Title" value={songForm.title} onChange={(event) => setSongForm((currentForm) => ({ ...currentForm, title: event.target.value }))} />
-                                            <input placeholder="Author" value={songForm.author} onChange={(event) => setSongForm((currentForm) => ({ ...currentForm, author: event.target.value }))} />
-                                            <input placeholder="Copyright" value={songForm.copyright} onChange={(event) => setSongForm((currentForm) => ({ ...currentForm, copyright: event.target.value }))} />
-                                            <input placeholder="Key" value={songForm.keySignature} onChange={(event) => setSongForm((currentForm) => ({ ...currentForm, keySignature: event.target.value }))} />
-                                            <input placeholder="Tags" value={songForm.tags} onChange={(event) => setSongForm((currentForm) => ({ ...currentForm, tags: event.target.value }))} />
-                                            <textarea placeholder="Song Notes" rows={2} value={songForm.notes} onChange={(event) => setSongForm((currentForm) => ({ ...currentForm, notes: event.target.value }))} />
-                                            <textarea placeholder="Lyrics" rows={4} value={songForm.lyrics} onChange={(event) => setSongForm((currentForm) => ({ ...currentForm, lyrics: event.target.value }))} />
-                                        </div>
-                                        <div className="resource-form-actions">
-                                            <button className="translation-btn" type="submit">{selectedSongId ? 'Update Song' : 'Save Song'}</button>
-                                            {selectedSongId && <button className="auth-secondary-btn inline-btn" onClick={resetSongEditor} type="button">Cancel</button>}
-                                        </div>
-                                    </form>
-                                )}
-
                                 {resTab === 'Media' && (
                                     <form className="resource-form" onSubmit={addMediaItem}>
                                         <div className="resource-form-title">{selectedMediaItemId ? 'Edit Media' : 'Add Media'}</div>
@@ -2623,7 +3279,11 @@ export default function ControlPanel() {
                                 )}
 
                                 {resTab === 'Songs' && filteredSongs.length === 0 && (
-                                    <div className="resource-empty-state">No songs saved for this account yet.</div>
+                                    <div className="resource-empty-state">
+                                        {selectedSongCategoryId === ALL_SONGS_CATEGORY_ID
+                                            ? 'No songs saved for this account yet.'
+                                            : `No songs are in ${selectedSongCategory?.name ?? 'this category'} yet.`}
+                                    </div>
                                 )}
 
                                 {resTab === 'Media' && filteredMediaItems.length === 0 && (
@@ -2641,20 +3301,62 @@ export default function ControlPanel() {
 
                             {/* Quick Preview Pane */}
                             <div className="res-preview-pane">
-                                <div className="res-preview-image">
-                                    <div className="res-preview-text">
-                                        {resourcePreviewText}
+                                <>
+                                    <div className="res-preview-image">
+                                        {renderResourcePreviewContent()}
                                     </div>
-                                </div>
-                                <div className="res-preview-footer">
-                                    <span>{resourcePreviewFooter}</span>
-                                    <span><ListPlus size={14} /> Options</span>
-                                </div>
+                                    <div className="res-preview-footer">
+                                        <span>{resourcePreviewFooter}</span>
+                                        <span><ListPlus size={14} /> Options</span>
+                                    </div>
+                                </>
                             </div>
                         </ResizablePanelGroup>
                     </div>
                 </ResizablePanelGroup>
             </div>
+
+            {resTab === 'Songs' && isSongEditorOpen && (
+                <SongEditorModal
+                    isOpen={true}
+                    isEditing={Boolean(selectedSongId)}
+                    draft={songForm}
+                    songCategories={songCategories}
+                    activeSlideId={activeSongSlide?.id ?? null}
+                    onClose={resetSongEditor}
+                    onSave={addSong}
+                    onDraftFieldChange={updateSongDraftField}
+                    onSlideSelect={setActiveSongSlideId}
+                    onSlideAdd={addSongSlide}
+                    onSlideDelete={removeSongSlide}
+                    onSlideChange={updateSongSlide}
+                    onSlideStyleChange={updateSongSlideStyle}
+                />
+            )}
+
+            {isCategoryModalOpen && (
+                <div className="song-modal-overlay" role="presentation">
+                    <div className="song-modal-backdrop" onClick={() => setIsCategoryModalOpen(false)} />
+                    <form className="song-simple-modal" onSubmit={submitSongCategory}>
+                        <div className="song-editor-kicker">Songs</div>
+                        <h2>New Category</h2>
+                        <p>Organize your songs with a proper category instead of the browser prompt.</p>
+                        <label className="song-editor-field wide">
+                            <span>Category Name</span>
+                            <input
+                                autoFocus
+                                placeholder="Choir, Youth, Easter..."
+                                value={categoryNameDraft}
+                                onChange={(event) => setCategoryNameDraft(event.target.value)}
+                            />
+                        </label>
+                        <div className="song-simple-modal-actions">
+                            <button className="song-editor-secondary" onClick={() => setIsCategoryModalOpen(false)} type="button">Cancel</button>
+                            <button className="song-editor-primary" type="submit">Create Category</button>
+                        </div>
+                    </form>
+                </div>
+            )}
         </div>
     );
 }

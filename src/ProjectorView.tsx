@@ -2,6 +2,34 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createProjectorPresenceBroadcaster, createReceiver, type PresentationState } from './lib/Broadcast';
 import './index.css';
 
+function buildProjectorTextStyle(state: PresentationState): CSSProperties {
+    const textStyle = state.slideStyle;
+
+    return {
+        fontFamily: textStyle?.fontFamily,
+        color: textStyle?.color,
+        fontWeight: textStyle?.bold ? 700 : undefined,
+        fontStyle: textStyle?.italic ? 'italic' : undefined,
+        textAlign: textStyle?.textAlign,
+        lineHeight: textStyle?.lineHeight,
+        width: '100%',
+    };
+}
+
+function getProjectorJustifyContent(state: PresentationState) {
+    const verticalAlign = state.slideStyle?.verticalAlign;
+
+    if (verticalAlign === 'top') {
+        return 'flex-start';
+    }
+
+    if (verticalAlign === 'bottom') {
+        return 'flex-end';
+    }
+
+    return 'center';
+}
+
 export default function ProjectorView() {
     const [state, setState] = useState<PresentationState>({ type: 'clear', text: '' });
     const frameRef = useRef<HTMLDivElement | null>(null);
@@ -27,7 +55,8 @@ export default function ProjectorView() {
                 return;
             }
 
-            let nextTextSize = Math.min(frame.clientWidth * 0.09, frame.clientHeight * 0.17, 110);
+            const preferredTextSize = state.slideStyle?.fontSize ?? Math.min(frame.clientWidth * 0.09, frame.clientHeight * 0.17, 110);
+            let nextTextSize = Math.min(preferredTextSize, frame.clientHeight * 0.24, frame.clientWidth * 0.14, 180);
             let nextReferenceSize = Math.max(nextTextSize * 0.42, 22);
 
             content.style.setProperty('--projector-text-size', `${nextTextSize}px`);
@@ -112,9 +141,13 @@ export default function ProjectorView() {
                 <div
                     className="projector-content"
                     ref={contentRef}
-                    style={projectorStyle}
+                    style={{
+                        ...projectorStyle,
+                        justifyContent: getProjectorJustifyContent(state),
+                        alignItems: state.slideStyle?.textAlign === 'left' ? 'flex-start' : state.slideStyle?.textAlign === 'right' ? 'flex-end' : 'center',
+                    }}
                 >
-                <div className="projector-text">
+                <div className="projector-text" style={buildProjectorTextStyle(state)}>
                     {state.segments && state.segments.length > 0 ? (
                         state.segments.map((segment) => (
                             <span key={`${state.reference}-${segment.verseNumber}`} className="projector-verse-segment">
@@ -126,7 +159,7 @@ export default function ProjectorView() {
                         state.text
                     )}
                 </div>
-                {state.reference && (
+                {state.reference && state.type !== 'song' && (
                     <div className="projector-reference">{state.reference}</div>
                 )}
                 </div>

@@ -1,4 +1,4 @@
-import type { AppSettings, MediaItem, PresentationItem, SongItem, ThemeItem, UserWorkspace } from './AppData';
+import type { AppSettings, MediaItem, PresentationItem, SongCategory, SongItem, ThemeItem, UserWorkspace } from './AppData';
 import { defaultAppSettings } from './AppData';
 import { sanitizeTranslation, type BibleTranslation, type SlideItem } from './BibleTranslations';
 import { supabase } from './supabase';
@@ -204,13 +204,22 @@ export async function loadUserWorkspace(uid: string): Promise<UserWorkspace> {
     const documents = await loadWorkspaceDocuments(uid);
     const settingsData = documents.get('settings') as Partial<AppSettings> | undefined;
     const sessionItems = Array.isArray(documents.get('presentations')) ? documents.get('presentations') as Partial<SlideItem>[] : [];
-    const songs = Array.isArray(documents.get('songs')) ? documents.get('songs') as SongItem[] : [];
+    const songsPayload = documents.get('songs');
+    const songs = Array.isArray(songsPayload)
+        ? songsPayload as SongItem[]
+        : songsPayload && typeof songsPayload === 'object' && Array.isArray((songsPayload as { songs?: unknown }).songs)
+            ? (songsPayload as { songs: SongItem[] }).songs
+            : [];
+    const songCategories = songsPayload && typeof songsPayload === 'object' && Array.isArray((songsPayload as { categories?: unknown }).categories)
+        ? (songsPayload as { categories: SongCategory[] }).categories
+        : [];
     const mediaItems = Array.isArray(documents.get('media')) ? documents.get('media') as MediaItem[] : [];
     const themes = Array.isArray(documents.get('themes')) ? documents.get('themes') as ThemeItem[] : [];
     const presentations = Array.isArray(documents.get('presentation-library')) ? documents.get('presentation-library') as PresentationItem[] : [];
 
     return {
         sessionItems: sessionItems.map((item) => deserializeSlideItem(item)),
+        songCategories,
         songs,
         mediaItems,
         themes,
@@ -227,8 +236,11 @@ export async function saveSessionItems(uid: string, sessionItems: SlideItem[]) {
     await saveWorkspaceDocument(uid, 'presentations', sessionItems.map((item) => serializeSlideItem(item)));
 }
 
-export async function saveSongs(uid: string, songs: SongItem[]) {
-    await saveWorkspaceDocument(uid, 'songs', songs.map((song) => ({ ...song })));
+export async function saveSongs(uid: string, songs: SongItem[], categories: SongCategory[] = []) {
+    await saveWorkspaceDocument(uid, 'songs', {
+        songs: songs.map((song) => ({ ...song })),
+        categories: categories.map((category) => ({ ...category })),
+    });
 }
 
 export async function saveMediaItems(uid: string, mediaItems: MediaItem[]) {

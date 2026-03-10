@@ -1,6 +1,19 @@
+import type { SlideTextStyle } from './Broadcast';
 import type { SlideItem } from './BibleTranslations';
 
 export type ResourceTab = 'Songs' | 'Scriptures' | 'Media' | 'Presentations' | 'Themes' | 'Settings';
+
+export interface SongCategory {
+    id: string;
+    name: string;
+}
+
+export interface SongSlide {
+    id: string;
+    title: string;
+    content: string;
+    style?: SlideTextStyle;
+}
 
 export interface SongItem {
     id: string;
@@ -8,6 +21,8 @@ export interface SongItem {
     author: string;
     copyright: string;
     lyrics: string;
+    slides?: SongSlide[];
+    categoryId?: string | null;
     keySignature?: string;
     tags?: string;
     notes?: string;
@@ -55,6 +70,7 @@ export interface AppSettings {
 
 export interface UserWorkspace {
     sessionItems: SlideItem[];
+    songCategories: SongCategory[];
     songs: SongItem[];
     mediaItems: MediaItem[];
     themes: ThemeItem[];

@@ -1,4 +1,4 @@
-import type { VerseSegment } from './Broadcast';
+import type { SlideTextStyle, VerseSegment } from './Broadcast';
 
 export interface SlideItem {
     id: string;
@@ -6,6 +6,8 @@ export interface SlideItem {
     text: string;
     segments?: VerseSegment[];
     translationShortName?: string;
+    kind?: 'scripture' | 'song' | 'presentation';
+    slideStyle?: SlideTextStyle;
 }
 
 export interface BibleTranslation {

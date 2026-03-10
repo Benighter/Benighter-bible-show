@@ -3,12 +3,29 @@ export interface VerseSegment {
     text: string;
 }
 
+export type SlideTextAlign = 'left' | 'center' | 'right';
+export type SlideVerticalAlign = 'top' | 'middle' | 'bottom';
+
+export interface SlideTextStyle {
+    fontFamily?: string;
+    fontSize?: number;
+    color?: string;
+    bold?: boolean;
+    italic?: boolean;
+    textAlign?: SlideTextAlign;
+    verticalAlign?: SlideVerticalAlign;
+    offsetX?: number;
+    offsetY?: number;
+    lineHeight?: number;
+}
+
 export interface PresentationState {
     type: 'verse' | 'song' | 'clear' | 'blank' | 'logo';
     text: string;
     reference?: string;
     background?: string;
     segments?: VerseSegment[];
+    slideStyle?: SlideTextStyle;
 }
 
 type ChannelMessage =
