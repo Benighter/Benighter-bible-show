@@ -1,7 +1,7 @@
 import type { AppSettings, MediaItem, PresentationItem, SongCategory, SongItem, ThemeItem, UserWorkspace } from './AppData';
 import { defaultAppSettings } from './AppData';
 import { sanitizeTranslation, type BibleTranslation, type SlideItem } from './BibleTranslations';
-import { supabase } from './supabase';
+import { getSupabaseAccessToken, supabase, supabasePublishableKey, supabaseUrl } from './supabase';
 
 type Unsubscribe = () => void;
 
@@ -234,6 +234,36 @@ export async function saveUserSettings(uid: string, settings: AppSettings) {
 
 export async function saveSessionItems(uid: string, sessionItems: SlideItem[]) {
     await saveWorkspaceDocument(uid, 'presentations', sessionItems.map((item) => serializeSlideItem(item)));
+}
+
+export async function clearSessionItems(uid: string) {
+    await saveSessionItems(uid, []);
+}
+
+export function clearSessionItemsWithKeepalive(uid: string) {
+    const accessToken = getSupabaseAccessToken();
+    if (!accessToken) {
+        return;
+    }
+
+    void fetch(`${supabaseUrl}/rest/v1/${WORKSPACE_TABLE}?on_conflict=user_id,document_id`, {
+        method: 'POST',
+        headers: {
+            apikey: supabasePublishableKey,
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify({
+            user_id: uid,
+            document_id: 'presentations',
+            payload: [],
+            updated_at: new Date().toISOString(),
+        }),
+        keepalive: true,
+    }).catch(() => {
+        // Best-effort only during page shutdown.
+    });
 }
 
 export async function saveSongs(uid: string, songs: SongItem[], categories: SongCategory[] = []) {

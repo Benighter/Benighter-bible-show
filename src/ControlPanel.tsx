@@ -2,12 +2,12 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState, typ
 import { createProjectorPresenceListener, createSender, type PresentationState, type SlideTextStyle, type VerseSegment } from './lib/Broadcast';
 import { canonicalizeBookName, parseBibleTranslationFile, sanitizeTranslation, serializeBibleTranslation, type BibleTranslation, type SlideItem } from './lib/BibleTranslations';
 import { defaultAppSettings, type AppSettings, type MediaItem, type PresentationItem, type ResourceTab, type SongCategory, type SongItem, type SongSlide, type ThemeItem } from './lib/AppData';
-import { loadStoredTranslations as loadCloudTranslations, loadUserWorkspace, saveMediaItems, savePresentations, saveSessionItems, saveSongs, saveStoredTranslations as saveCloudTranslations, saveThemes, saveUserSettings, subscribeToStoredTranslations, subscribeToUserWorkspace } from './lib/FirebaseWorkspaceStorage';
+import { clearSessionItems, clearSessionItemsWithKeepalive, loadStoredTranslations as loadCloudTranslations, loadUserWorkspace, saveMediaItems, savePresentations, saveSessionItems, saveSongs, saveStoredTranslations as saveCloudTranslations, saveThemes, saveUserSettings, subscribeToStoredTranslations, subscribeToUserWorkspace } from './lib/FirebaseWorkspaceStorage';
 import { useAuth } from './lib/auth-context';
 import { ResizablePanelGroup } from './lib/ResizablePanelGroup';
-import { Play, Square, MonitorPlay, ListPlus, XCircle, FilePlus, FolderOpen, Save, Store, Globe, Bell, Image, CircleStop, ChevronDown, LogOut, Trash2 } from 'lucide-react';
+import { Play, Square, MonitorPlay, XCircle, FilePlus, FolderOpen, Save, Store, Globe, Bell, Image, CircleStop, ChevronDown, LogOut, Trash2 } from 'lucide-react';
 import SongEditorModal, { type SongEditorDraft } from './SongEditorModal';
-import { buildSongLyricsFromSlides, buildSongSlideItem, buildSongSlideItems, createSongSlide, getSongPreviewText, mergeSongSlideStyle, normalizeSongSlides } from './lib/SongSlides';
+import { buildSongLyricsFromSlides, buildSongSlideItem, buildSongSlideItems, createSongSlide, mergeSongSlideStyle, normalizeSongSlides } from './lib/SongSlides';
 import './index.css';
 
 interface ManagedScreen {
@@ -34,8 +34,37 @@ const SCRIPTURE_TABLE_LIMIT = 250;
 const RESOURCE_TABS: ResourceTab[] = ['Songs', 'Scriptures', 'Media', 'Presentations', 'Themes', 'Settings'];
 const ALL_SONGS_CATEGORY_ID = 'all-songs';
 const ALL_SONGS_CATEGORY_NAME = 'All Songs';
+const SCHEDULE_CLEAR_MARKER_PREFIX = 'bible-show-clear-schedule-on-next-launch';
 const TRANSLATION_CACHE_PREFIX = 'bible-show-translation-cache';
 const TRANSLATION_CACHE_INDEX_LIMIT = 4;
+
+function buildScheduleClearMarkerKey(userId: string) {
+    return `${SCHEDULE_CLEAR_MARKER_PREFIX}:${userId}`;
+}
+
+function hasPendingScheduleClear(userId: string) {
+    try {
+        return window.localStorage.getItem(buildScheduleClearMarkerKey(userId)) === '1';
+    } catch {
+        return false;
+    }
+}
+
+function markPendingScheduleClear(userId: string) {
+    try {
+        window.localStorage.setItem(buildScheduleClearMarkerKey(userId), '1');
+    } catch {
+        // Ignore storage failures and rely on best-effort shutdown clearing.
+    }
+}
+
+function clearPendingScheduleClear(userId: string) {
+    try {
+        window.localStorage.removeItem(buildScheduleClearMarkerKey(userId));
+    } catch {
+        // Ignore storage cleanup failures.
+    }
+}
 
 function createSongDraft(categoryId = ''): SongEditorDraft {
     return {
@@ -578,6 +607,28 @@ export default function ControlPanel() {
     const [liveItem, setLiveItem] = useState<SlideItem | null>(null);
     const [isLiveOffline, setIsLiveOffline] = useState(true);
 
+    const resetSessionItemPersistence = useCallback((nextItems: SlideItem[]) => {
+        const nextSignature = buildStableSignature(nextItems);
+        syncedPayloadSignaturesRef.current.sessionItems = nextSignature;
+        localPayloadSignaturesRef.current.sessionItems = nextSignature;
+        dirtyPayloadsRef.current.sessionItems = false;
+    }, []);
+
+    const applyClearedScheduleState = useCallback(() => {
+        resetSessionItemPersistence([]);
+        setSessionItems([]);
+    }, [resetSessionItemPersistence]);
+
+    const persistClearedSchedule = useCallback(async (uid: string, updateState = true) => {
+        await clearSessionItems(uid);
+        if (updateState) {
+            applyClearedScheduleState();
+        } else {
+            resetSessionItemPersistence([]);
+        }
+        clearPendingScheduleClear(uid);
+    }, [applyClearedScheduleState, resetSessionItemPersistence]);
+
     // Projector Connection State
     const projectorWindowRef = useRef<Window | null>(null);
     const secondaryScreenRef = useRef<ManagedScreen | null>(null);
@@ -746,11 +797,6 @@ export default function ControlPanel() {
         () => themes.filter((theme) => matchesResourceSearch([theme.name, theme.background, theme.textColor, theme.accentColor], normalizedResourceSearch)),
         [normalizedResourceSearch, themes],
     );
-    const activeTheme = themes.find((theme) => theme.id === appSettings.defaultThemeId) ?? null;
-    const selectedSong = songs.find((song) => song.id === selectedSongId) ?? null;
-    const selectedMediaItem = mediaItems.find((item) => item.id === selectedMediaItemId) ?? null;
-    const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) ?? null;
-    const selectedPresentation = presentations.find((presentation) => presentation.id === selectedPresentationId) ?? null;
     const selectedSongCategory = songCategoryOptions.find((category) => category.id === selectedSongCategoryId) ?? songCategoryOptions[0];
     const activeSongSlide = songForm.slides.find((slide) => slide.id === activeSongSlideId) ?? songForm.slides[0] ?? null;
     const queuedSongGroups = useMemo<QueuedSongGroup[]>(() => {
@@ -1060,9 +1106,18 @@ export default function ControlPanel() {
                     return;
                 }
 
-                applyWorkspaceData(workspace);
+                const pendingScheduleClear = hasPendingScheduleClear(user.uid);
+                applyWorkspaceData({
+                    ...workspace,
+                    sessionItems: pendingScheduleClear ? [] : workspace.sessionItems,
+                });
                 applyTranslationsData(storedTranslations, workspace.settings.activeTranslationId ?? null);
                 void ensureTranslationLoaded(workspace.settings.activeTranslationId ?? getDefaultTranslationId(storedTranslations));
+                if (pendingScheduleClear) {
+                    void persistClearedSchedule(user.uid, false).catch((error) => {
+                        console.warn('Unable to clear the previous schedule after app exit.', error);
+                    });
+                }
                 workspaceReady = true;
                 translationsReady = true;
                 markHydrated();
@@ -1080,7 +1135,10 @@ export default function ControlPanel() {
         void hydrateFromFetch('initial');
 
         const unsubscribeWorkspace = subscribeToUserWorkspace(user.uid, (workspace) => {
-            applyWorkspaceData(workspace);
+            applyWorkspaceData({
+                ...workspace,
+                sessionItems: hasPendingScheduleClear(user.uid) ? [] : workspace.sessionItems,
+            });
             workspaceReady = true;
             markHydrated();
         }, (error) => {
@@ -1104,7 +1162,23 @@ export default function ControlPanel() {
             unsubscribeTranslations();
             cloudHydratedRef.current = false;
         };
-    }, [applyTranslationsData, applyWorkspaceData, ensureTranslationLoaded, user]);
+    }, [applyTranslationsData, applyWorkspaceData, ensureTranslationLoaded, persistClearedSchedule, user]);
+
+    useEffect(() => {
+        if (!user) {
+            return;
+        }
+
+        const handlePageHide = () => {
+            markPendingScheduleClear(user.uid);
+            clearSessionItemsWithKeepalive(user.uid);
+        };
+
+        window.addEventListener('pagehide', handlePageHide);
+        return () => {
+            window.removeEventListener('pagehide', handlePageHide);
+        };
+    }, [user]);
 
     useEffect(() => {
         if (!activeTranslationId) {
@@ -2404,7 +2478,19 @@ export default function ControlPanel() {
     };
 
     const signOut = async () => {
-        const hasPendingWrites = Object.values(dirtyPayloadsRef.current).some(Boolean);
+        if (!user) {
+            return;
+        }
+
+        try {
+            setWorkspaceStatus('Clearing your schedule...');
+            await persistClearedSchedule(user.uid, true);
+        } catch {
+            setWorkspaceStatus('We could not clear your schedule. Please try again.');
+            return;
+        }
+
+        const hasPendingWrites = Object.entries(dirtyPayloadsRef.current).some(([key, value]) => key !== 'sessionItems' && value);
 
         if (hasPendingWrites) {
             try {
@@ -2422,34 +2508,6 @@ export default function ControlPanel() {
         }
     };
 
-    const resourcePreviewText =
-        resTab === 'Scriptures'
-            ? previewItem?.text ?? 'Select an item to preview'
-            : resTab === 'Songs'
-                ? getSongPreviewText(selectedSong) || getSongPreviewText(filteredSongs[0] ?? null) || 'Create a song to save it to your account.'
-                : resTab === 'Media'
-                    ? selectedMediaItem?.notes || selectedMediaItem?.source || filteredMediaItems[0]?.notes || filteredMediaItems[0]?.source || 'Create a media item to save it to your account.'
-                    : resTab === 'Presentations'
-                        ? selectedPresentation?.content || filteredPresentationItems[0]?.content || 'Create a presentation and queue it to the service order.'
-                        : resTab === 'Themes'
-                            ? selectedTheme ? `${selectedTheme.name}\nBackground: ${selectedTheme.background}\nText: ${selectedTheme.textColor}` : filteredThemes[0] ? `${filteredThemes[0].name}\nBackground: ${filteredThemes[0].background}\nText: ${filteredThemes[0].textColor}` : 'Create a theme to save it to your account.'
-                            : `Default theme: ${activeTheme?.name ?? 'None'}\nProjector background: ${appSettings.projectorBackground}`;
-
-    const resourcePreviewFooter =
-        resTab === 'Scriptures'
-            ? committedScriptureQuery
-                ? `${filteredScriptureItems.length} verses in ${activeTranslation?.shortName ?? ''}`
-                : `Waiting for a scripture search in ${activeTranslation?.shortName ?? ''}`
-            : resTab === 'Songs'
-                ? `${filteredSongs.length} song${filteredSongs.length === 1 ? '' : 's'} synced`
-                : resTab === 'Media'
-                    ? `${filteredMediaItems.length} media item${filteredMediaItems.length === 1 ? '' : 's'} synced`
-                    : resTab === 'Presentations'
-                        ? `${filteredPresentationItems.length} presentation${filteredPresentationItems.length === 1 ? '' : 's'} in the library`
-                        : resTab === 'Themes'
-                            ? `${filteredThemes.length} theme${filteredThemes.length === 1 ? '' : 's'} synced`
-                            : 'Your settings are saved to your account';
-
     const renderMonitorContent = (item: SlideItem) => {
         const monitorStyles = buildSongMonitorStyles(item.slideStyle);
         const shouldShowReference = !isSongSlideItem(item);
@@ -2463,126 +2521,16 @@ export default function ControlPanel() {
                             item.segments.map((segment) => (
                                 <span key={`${item.id}-${segment.verseNumber}`} className="projector-verse-segment">
                                     <span className="projector-verse-number">{segment.verseNumber}</span>
-                                    <span>{segment.text}</span>
+                                    <span dangerouslySetInnerHTML={{ __html: segment.text }} />
                                 </span>
                             ))
                         ) : (
-                            item.text
+                            <span dangerouslySetInnerHTML={{ __html: item.text }} />
                         )}
                     </div>
                     {shouldShowReference && <div className="projector-reference scripture-monitor-reference">{formatSlideReference(item)}</div>}
                 </div>
             </>
-        );
-    };
-
-    const renderResourcePreviewContent = () => {
-        if (resTab === 'Scriptures') {
-            return previewItem ? renderMonitorContent(previewItem) : <div className="placeholder-text">Select an item</div>;
-        }
-
-        if (resTab === 'Songs') {
-            const previewSong = selectedSong ?? filteredSongs[0] ?? null;
-
-            if (!previewSong) {
-                return <div className="resource-preview-empty">Create a song to start building your library.</div>;
-            }
-
-            const previewSlide = buildSongSlideItem(previewSong);
-            const previewStyles = buildWorkspaceSlideStyles(previewSlide.slideStyle);
-
-            return (
-                <div className="resource-preview-card resource-preview-card-song">
-                    <div className="resource-preview-kicker">Song Preview</div>
-                    <div className="resource-preview-title">{previewSong.title}</div>
-                    <div className="resource-preview-subtitle">{previewSong.keySignature?.trim() || 'Song library item'}</div>
-                    <div className="resource-preview-song-stage" style={previewStyles.contentStyle}>
-                        <div className="resource-preview-song-text" style={previewStyles.textStyle}>{previewSlide.text}</div>
-                    </div>
-                </div>
-            );
-        }
-
-        if (resTab === 'Media') {
-            const previewMedia = selectedMediaItem ?? filteredMediaItems[0] ?? null;
-
-            if (!previewMedia) {
-                return <div className="resource-preview-empty">Add media to preview images, videos, and source details here.</div>;
-            }
-
-            const mediaDescriptor = `${previewMedia.type} ${previewMedia.source} ${previewMedia.thumbnailUrl ?? ''}`.toLowerCase();
-            const isVideo = /(video|mp4|mov|avi|wmv|webm|mkv)/.test(mediaDescriptor);
-            const isImage = !isVideo && /(image|png|jpg|jpeg|gif|webp|svg|bmp)/.test(mediaDescriptor);
-            const mediaSource = previewMedia.thumbnailUrl || previewMedia.source;
-
-            return (
-                <div className="resource-preview-card resource-preview-card-media">
-                    <div className="resource-preview-kicker">Media Preview</div>
-                    <div className="resource-preview-title">{previewMedia.title}</div>
-                    <div className="resource-preview-subtitle">{previewMedia.type || 'Media item'}</div>
-                    <div className="resource-preview-media-stage">
-                        {mediaSource && isImage ? (
-                            <img className="resource-preview-media-image" src={mediaSource} alt={previewMedia.title} />
-                        ) : mediaSource && isVideo ? (
-                            <video className="resource-preview-media-video" controls muted preload="metadata" poster={previewMedia.thumbnailUrl || undefined}>
-                                <source src={previewMedia.source} />
-                            </video>
-                        ) : (
-                            <div className="resource-preview-media-placeholder">
-                                <strong>{previewMedia.type || 'Media'}</strong>
-                                <span>{previewMedia.source || 'No source path yet'}</span>
-                            </div>
-                        )}
-                    </div>
-                    <div className="resource-preview-caption">{compactPreviewText(previewMedia.notes || previewMedia.source || previewMedia.duration, 180)}</div>
-                </div>
-            );
-        }
-
-        if (resTab === 'Presentations') {
-            const previewPresentation = selectedPresentation ?? filteredPresentationItems[0] ?? null;
-
-            if (!previewPresentation) {
-                return <div className="resource-preview-empty">Create a presentation to preview it here.</div>;
-            }
-
-            return (
-                <div className="resource-preview-card resource-preview-card-presentation">
-                    <div className="resource-preview-kicker">Presentation Preview</div>
-                    <div className="resource-preview-title">{previewPresentation.title}</div>
-                    <div className="resource-preview-subtitle">{previewPresentation.reference || previewPresentation.category}</div>
-                    <div className="resource-preview-presentation-stage" style={{ background: previewPresentation.background }}>
-                        <div className="resource-preview-presentation-text">{previewPresentation.content}</div>
-                    </div>
-                </div>
-            );
-        }
-
-        if (resTab === 'Themes') {
-            const previewTheme = selectedTheme ?? filteredThemes[0] ?? null;
-
-            if (!previewTheme) {
-                return <div className="resource-preview-empty">Create a theme to preview its colors and typography here.</div>;
-            }
-
-            return (
-                <div className="resource-preview-card resource-preview-card-theme">
-                    <div className="resource-preview-kicker">Theme Preview</div>
-                    <div className="resource-preview-title">{previewTheme.name}</div>
-                    <div className="resource-preview-theme-stage" style={{ background: previewTheme.background, color: previewTheme.textColor, fontFamily: previewTheme.fontFamily || 'Segoe UI' }}>
-                        <div className="resource-preview-theme-accent" style={{ background: previewTheme.accentColor }}></div>
-                        <div className="resource-preview-theme-text" style={{ fontSize: `${Math.max(24, Math.min(72, previewTheme.textSize ?? 48))}px` }}>Grace and peace be with you</div>
-                    </div>
-                </div>
-            );
-        }
-
-        return (
-            <div className="resource-preview-card resource-preview-card-settings">
-                <div className="resource-preview-kicker">Settings</div>
-                <div className="resource-preview-title">Workspace Defaults</div>
-                <div className="resource-preview-caption">{resourcePreviewText}</div>
-            </div>
         );
     };
 
@@ -2814,7 +2762,7 @@ export default function ControlPanel() {
                                                     <div className="slide-badge badge-preview">{previewItem?.id === slide.id ? 'Preview' : `Slide ${activeWorkspaceSongGroup.slides.findIndex((item) => item.id === slide.id) + 1}`}</div>
                                                     {liveItem?.id === slide.id && !isLiveOffline && <div className="slide-badge badge-live">Live</div>}
                                                     <div className="song-workspace-card-stage" style={workspaceSlideStyles.contentStyle}>
-                                                        <div className="song-workspace-card-text" style={workspaceSlideStyles.textStyle}>{slide.text}</div>
+                                                        <div className="song-workspace-card-text" style={workspaceSlideStyles.textStyle} dangerouslySetInnerHTML={{ __html: slide.text }} />
                                                     </div>
                                                     <div className="song-workspace-card-footer">
                                                         <strong>{activeWorkspaceSongGroup.song.title}</strong>
@@ -2836,37 +2784,18 @@ export default function ControlPanel() {
                                 </div>
                             </div>
 
-                            {/* Monitors */}
+                            {/* Preview Monitor */}
                             <div className="pane monitors-pane">
-                                <ResizablePanelGroup
-                                    className="monitors-layout"
-                                    direction="vertical"
-                                    defaultSizes={[50, 50]}
-                                    minSizes={[24, 24]}
-                                    storageKey="bible-show-monitors-layout"
-                                >
-                                    <div className="monitor-wrapper">
-                                        <div className="monitor-title" style={{ color: isLiveOffline ? '#888' : '#e51400' }}>Live Output</div>
-                                        <div className={`monitor ${!isLiveOffline ? 'live-active' : ''}`}>
-                                            {!isLiveOffline && liveItem ? (
-                                                renderMonitorContent(liveItem)
-                                            ) : (
-                                                <div className="placeholder-text">Logo / Black</div>
-                                            )}
-                                        </div>
+                                <div className="monitor-wrapper monitor-wrapper-fill">
+                                    <div className="monitor-title" style={{ color: '#f39c12' }}>Preview</div>
+                                    <div className="monitor">
+                                        {previewItem ? (
+                                            renderMonitorContent(previewItem)
+                                        ) : (
+                                            <div className="placeholder-text">Select an item</div>
+                                        )}
                                     </div>
-
-                                    <div className="monitor-wrapper">
-                                        <div className="monitor-title" style={{ color: '#f39c12' }}>Preview</div>
-                                        <div className="monitor">
-                                            {previewItem ? (
-                                                renderMonitorContent(previewItem)
-                                            ) : (
-                                                <div className="placeholder-text">Select an item</div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </ResizablePanelGroup>
+                                </div>
                             </div>
                         </ResizablePanelGroup>
                     </div>
@@ -2887,8 +2816,8 @@ export default function ControlPanel() {
                         <ResizablePanelGroup
                             className="resources-content"
                             direction="horizontal"
-                            defaultSizes={[20, 48, 32]}
-                            minSizes={[14, 24, 18]}
+                            defaultSizes={[18, 50, 32]}
+                            minSizes={[14, 28, 24]}
                             storageKey="bible-show-resources-layout"
                         >
                             {/* Collections Pane */}
@@ -3299,17 +3228,17 @@ export default function ControlPanel() {
                                 )}
                             </div>
 
-                            {/* Quick Preview Pane */}
-                            <div className="res-preview-pane">
-                                <>
-                                    <div className="res-preview-image">
-                                        {renderResourcePreviewContent()}
+                            <div className="res-preview-pane resource-live-pane">
+                                <div className="monitor-wrapper monitor-wrapper-fill resource-live-monitor-wrapper">
+                                    <div className="monitor-title" style={{ color: isLiveOffline ? '#888' : '#e51400' }}>Live Output</div>
+                                    <div className={`monitor resource-live-monitor ${!isLiveOffline ? 'live-active' : ''}`}>
+                                        {!isLiveOffline && liveItem ? (
+                                            renderMonitorContent(liveItem)
+                                        ) : (
+                                            <div className="placeholder-text">Logo / Black</div>
+                                        )}
                                     </div>
-                                    <div className="res-preview-footer">
-                                        <span>{resourcePreviewFooter}</span>
-                                        <span><ListPlus size={14} /> Options</span>
-                                    </div>
-                                </>
+                                </div>
                             </div>
                         </ResizablePanelGroup>
                     </div>

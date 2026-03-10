@@ -90,15 +90,109 @@ function StyleToggleButton({
     active,
     label,
     onClick,
+    onPointerDown,
 }: {
     active: boolean;
     label: string;
     onClick: () => void;
+    onPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 }) {
     return (
-        <button className={`song-editor-toggle ${active ? 'active' : ''}`} onClick={onClick} type="button">
+        <button
+            className={`song-editor-toggle ${active ? 'active' : ''}`}
+            onClick={onClick}
+            onPointerDown={onPointerDown}
+            type="button"
+        >
             {label}
         </button>
+    );
+}
+
+const PRESET_COLORS = [
+    '#ffffff',
+    '#cccccc',
+    '#ff0000',
+    '#ff9900',
+    '#ffff00',
+    '#00cc00',
+    '#00ccff',
+    '#0066cc',
+    '#9900cc',
+    '#ff00ff',
+];
+
+function ColorPickerDropdown({
+    color,
+    onChange,
+}: {
+    color: string;
+    onChange: (color: string) => void;
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const nativeInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        };
+
+        if (isOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isOpen]);
+
+    return (
+        <div className="color-picker-dropdown" ref={containerRef}>
+            <button
+                type="button"
+                className="color-picker-trigger"
+                style={{ backgroundColor: color || '#ffffff' }}
+                onClick={() => setIsOpen((prev) => !prev)}
+                title="Change Color"
+            />
+            {isOpen && (
+                <div className="color-picker-popover">
+                    <div className="color-picker-label">Standard Colors</div>
+                    <div className="color-preset-grid">
+                        {PRESET_COLORS.map((preset) => (
+                            <button
+                                key={preset}
+                                type="button"
+                                className="color-preset-btn"
+                                style={{ backgroundColor: preset }}
+                                onClick={() => {
+                                    onChange(preset);
+                                    setIsOpen(false);
+                                }}
+                                title={preset}
+                            />
+                        ))}
+                    </div>
+                    <button
+                        type="button"
+                        className="color-custom-btn"
+                        onClick={() => nativeInputRef.current?.click()}
+                    >
+                        Custom Color...
+                    </button>
+                    <input
+                        ref={nativeInputRef}
+                        type="color"
+                        value={color}
+                        onChange={(e) => {
+                            onChange(e.target.value);
+                            setIsOpen(false);
+                        }}
+                        className="color-custom-input"
+                    />
+                </div>
+            )}
+        </div>
     );
 }
 
@@ -138,6 +232,25 @@ export default function SongEditorModal({
     const dragStartRef = useRef<{ pointerX: number; pointerY: number; rect: ModalRect } | null>(null);
     const resizeStartRef = useRef<{ pointerX: number; pointerY: number; rect: ModalRect; handle: ResizeHandle } | null>(null);
     const [modalRect, setModalRect] = useState<ModalRect>(() => buildInitialModalRect());
+    const [formatState, setFormatState] = useState({ bold: false, italic: false, underline: false, color: '' });
+
+    useEffect(() => {
+        const handleSelectionChange = () => {
+            if (document.activeElement === stageInputRef.current) {
+                setFormatState({
+                    bold: document.queryCommandState('bold'),
+                    italic: document.queryCommandState('italic'),
+                    underline: document.queryCommandState('underline'),
+                    color: document.queryCommandValue('foreColor') || '',
+                });
+            } else {
+                setFormatState({ bold: false, italic: false, underline: false, color: '' });
+            }
+        };
+
+        document.addEventListener('selectionchange', handleSelectionChange);
+        return () => document.removeEventListener('selectionchange', handleSelectionChange);
+    }, []);
 
     useEffect(() => {
         const handleResize = () => {
@@ -186,6 +299,48 @@ export default function SongEditorModal({
 
     const setVerticalAlign = (verticalAlign: SlideVerticalAlign) => {
         updateSlideStyle({ verticalAlign, offsetY: 0 });
+    };
+
+    const handleFormatToggle = (command: string) => {
+        const selection = window.getSelection();
+        const hasTextFocus = document.activeElement === stageInputRef.current || (selection && selection.rangeCount > 0 && stageInputRef.current?.contains(selection.anchorNode));
+
+        if (hasTextFocus && !selection?.isCollapsed) {
+            document.execCommand(command, false);
+            if (stageInputRef.current) {
+                onSlideChange(activeSlide!.id, { content: stageInputRef.current.innerHTML });
+            }
+        }
+    };
+
+    const handleColorChange = (color: string) => {
+        const selection = window.getSelection();
+        const hasTextFocus = document.activeElement === stageInputRef.current || (selection && selection.rangeCount > 0 && stageInputRef.current?.contains(selection.anchorNode));
+
+        if (hasTextFocus && !selection?.isCollapsed) {
+            document.execCommand('foreColor', false, color);
+            if (stageInputRef.current) {
+                // Fix for underline color: browser natively wraps color inside <u>, causing the underline to remain default color.
+                // We run a regex replacement to restructure: <u><font color="...">text</font></u> -> <font color="..."><u>text</u></font>
+                let htmlContent = stageInputRef.current.innerHTML;
+
+                // Matches <u> followed eventually by a color tag (span or font) and performs swaps
+                const underlineFixRegex = /(<u[^>]*>)\s*(<span[^>]*color:(.*?);[^>]*>|<font[^>]*color=["'](.*?)["'][^>]*>)(.*?)(<\/span>|<\/font>)\s*<\/u>/gi;
+
+                // Keep swapping until no more nested matches are found, due to possible multiple elements
+                let previousHtml = '';
+                while (htmlContent !== previousHtml) {
+                    previousHtml = htmlContent;
+                    htmlContent = htmlContent.replace(underlineFixRegex, '$2$1$5</u>$6');
+                }
+
+                if (stageInputRef.current.innerHTML !== htmlContent) {
+                    stageInputRef.current.innerHTML = htmlContent;
+                }
+
+                onSlideChange(activeSlide!.id, { content: htmlContent });
+            }
+        }
     };
 
     const handleDragPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -305,8 +460,8 @@ export default function SongEditorModal({
         }
 
         const nextText = activeSlide?.content ?? '';
-        if (editable.innerText !== nextText) {
-            editable.innerText = nextText;
+        if (editable.innerHTML !== nextText) {
+            editable.innerHTML = nextText;
         }
     }, [activeSlide?.content]);
 
@@ -315,7 +470,7 @@ export default function SongEditorModal({
             return;
         }
 
-        onSlideChange(activeSlide.id, { content: event.currentTarget.innerText.replace(/\r/g, '') });
+        onSlideChange(activeSlide.id, { content: event.currentTarget.innerHTML });
     };
 
     if (!isOpen) {
@@ -357,15 +512,30 @@ export default function SongEditorModal({
                             />
                         </StyleField>
                         <StyleField label="Color">
-                            <input
-                                type="color"
-                                value={activeStyle.color}
-                                    onChange={(event) => updateSlideStyle({ color: event.target.value })}
+                            <ColorPickerDropdown
+                                color={formatState.color || activeStyle.color || '#ffffff'}
+                                onChange={handleColorChange}
                             />
                         </StyleField>
                         <div className="song-editor-toggle-row song-editor-toggle-row-compact">
-                            <StyleToggleButton active={activeStyle.bold} label="B" onClick={() => updateSlideStyle({ bold: !activeStyle.bold })} />
-                            <StyleToggleButton active={activeStyle.italic} label="I" onClick={() => updateSlideStyle({ italic: !activeStyle.italic })} />
+                            <StyleToggleButton
+                                active={formatState.bold}
+                                label="B"
+                                onPointerDown={(e) => e.preventDefault()}
+                                onClick={() => handleFormatToggle('bold')}
+                            />
+                            <StyleToggleButton
+                                active={formatState.italic}
+                                label="I"
+                                onPointerDown={(e) => e.preventDefault()}
+                                onClick={() => handleFormatToggle('italic')}
+                            />
+                            <StyleToggleButton
+                                active={formatState.underline}
+                                label="U"
+                                onPointerDown={(e) => e.preventDefault()}
+                                onClick={() => handleFormatToggle('underline')}
+                            />
                         </div>
                         <div className="song-editor-toggle-row song-editor-toggle-row-compact">
                             <StyleToggleButton active={activeStyle.textAlign === 'left'} label="Left" onClick={() => setTextAlign('left')} />
@@ -411,7 +581,7 @@ export default function SongEditorModal({
                                 >
                                     <span className="song-editor-slide-index">{index + 1}</span>
                                     <span className="song-editor-slide-name">{slide.title || `Slide ${index + 1}`}</span>
-                                    <span className="song-editor-slide-excerpt">{slide.content || 'Empty slide'}</span>
+                                    <span className="song-editor-slide-excerpt">{slide.content.replace(/<[^>]*>?/gm, '') || 'Empty slide'}</span>
                                 </button>
                             ))}
                         </div>

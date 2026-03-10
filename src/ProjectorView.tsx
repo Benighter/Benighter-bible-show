@@ -147,21 +147,21 @@ export default function ProjectorView() {
                         alignItems: state.slideStyle?.textAlign === 'left' ? 'flex-start' : state.slideStyle?.textAlign === 'right' ? 'flex-end' : 'center',
                     }}
                 >
-                <div className="projector-text" style={buildProjectorTextStyle(state)}>
-                    {state.segments && state.segments.length > 0 ? (
-                        state.segments.map((segment) => (
-                            <span key={`${state.reference}-${segment.verseNumber}`} className="projector-verse-segment">
-                                <span className="projector-verse-number">{segment.verseNumber}</span>
-                                <span>{segment.text}</span>
-                            </span>
-                        ))
-                    ) : (
-                        state.text
+                    <div className="projector-text" style={buildProjectorTextStyle(state)}>
+                        {state.segments && state.segments.length > 0 ? (
+                            state.segments.map((segment) => (
+                                <span key={`${state.reference}-${segment.verseNumber}`} className="projector-verse-segment">
+                                    <span className="projector-verse-number">{segment.verseNumber}</span>
+                                    <span dangerouslySetInnerHTML={{ __html: segment.text }} />
+                                </span>
+                            ))
+                        ) : (
+                            <span dangerouslySetInnerHTML={{ __html: state.text }} />
+                        )}
+                    </div>
+                    {state.reference && state.type !== 'song' && (
+                        <div className="projector-reference">{state.reference}</div>
                     )}
-                </div>
-                {state.reference && state.type !== 'song' && (
-                    <div className="projector-reference">{state.reference}</div>
-                )}
                 </div>
             </div>
         </div>

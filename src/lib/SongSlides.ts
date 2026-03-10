@@ -19,7 +19,7 @@ export const DEFAULT_SONG_SLIDE_STYLE: Required<SlideTextStyle> = {
     fontFamily: 'Segoe UI',
     fontSize: 72,
     color: '#ffffff',
-    bold: true,
+    bold: false,
     italic: false,
     textAlign: 'center',
     verticalAlign: 'middle',

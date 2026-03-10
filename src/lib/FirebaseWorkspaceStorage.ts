@@ -1,4 +1,6 @@
 export {
+    clearSessionItems,
+    clearSessionItemsWithKeepalive,
     loadStoredTranslations,
     loadUserWorkspace,
     saveMediaItems,
