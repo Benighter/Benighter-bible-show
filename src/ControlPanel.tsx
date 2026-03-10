@@ -26,18 +26,8 @@ type WindowWithScreenDetails = Window & {
     getScreenDetails?: () => Promise<ManagedScreenDetails>;
 };
 
-const builtInVerses: SlideItem[] = [
-    { id: 'gen1_1', ref: 'Genesis 1:1', text: 'In the beginning God created the heaven and the earth.' },
-    { id: 'jn3_16', ref: 'John 3:16', text: 'For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life.' },
-    { id: 'ps23_1', ref: 'Psalm 23:1', text: 'The LORD is my shepherd; I shall not want.' },
-    { id: 'rom8_28', ref: 'Romans 8:28', text: 'And we know that all things work together for good to them that love God, to them who are the called according to his purpose.' },
-    { id: 'phil4_13', ref: 'Philippians 4:13', text: 'I can do all things through Christ which strengtheneth me.' }
-];
-
-const BUILT_IN_TRANSLATION_ID = 'builtin-kjv1769-sample';
 const ACTIVE_TRANSLATION_STORAGE_KEY = 'bible-show-active-translation';
 const SESSION_ITEMS_STORAGE_KEY = 'bible-show-session-items';
-const SCRIPTURE_WORKSPACE_LIMIT = 24;
 const SCRIPTURE_TABLE_LIMIT = 250;
 
 type ScriptureSearchMatch = {
@@ -142,7 +132,7 @@ function getDefaultTranslationId(translations: BibleTranslation[]) {
         return shortName === 'kjv' || shortName.startsWith('kjv') || name.includes('king james');
     });
 
-    return preferredTranslation?.id ?? translations[0]?.id ?? BUILT_IN_TRANSLATION_ID;
+    return preferredTranslation?.id ?? translations[0]?.id ?? null;
 }
 
 function buildVisibleScriptureRows(items: SlideItem[], focusedItem: SlideItem | null, limit: number) {
@@ -241,23 +231,8 @@ function buildBookOptions(verses: SlideItem[]): BookOption[] {
     }));
 }
 
-const builtInTranslation: BibleTranslation = {
-    id: BUILT_IN_TRANSLATION_ID,
-    name: 'KJV 1769 Sample',
-    shortName: 'KJV1769',
-    verses: builtInVerses,
-    sourceFileName: 'KJV1769.bib',
-};
-
-const dummySongs = [
-    { id: 's1', title: '10,000 Reasons (Bless The Lord)', author: 'Jonas Myrin | Matt Redman', copyright: '© 2011 Atlas' },
-    { id: 's2', title: 'A Heart Like Thine', author: 'Judson Van DeVenter', copyright: 'Public Domain' },
-    { id: 's3', title: 'A Mighty Fortress Is Our God', author: 'Hans Leo Hassler | Martin Luther', copyright: 'Public Domain' },
-    { id: 's4', title: 'A New Name In Glory', author: 'C. Austin Miles', copyright: 'Public Domain' },
-    { id: 's5', title: 'A Robe Of White', author: 'Haldor Lillenas', copyright: 'Public Domain' },
-    { id: 's6', title: 'Abide With Me', author: 'Henry F. Lyte | William H. Monk', copyright: 'Public Domain' },
-    { id: 's7', title: 'Alas And Did My Savior Bleed', author: 'Hugh Wilson | Isaac Watts', copyright: 'Public Domain' },
-];
+type DummySong = { id: string, title: string, author: string, copyright: string };
+const dummySongs: DummySong[] = [];
 
 export default function ControlPanel() {
     const senderRef = useRef<ReturnType<typeof createSender> | null>(null);
@@ -274,8 +249,8 @@ export default function ControlPanel() {
     const [committedScriptureQuery, setCommittedScriptureQuery] = useState('');
     const [selectedBook, setSelectedBook] = useState('');
     const [selectedChapter, setSelectedChapter] = useState('');
-    const [translations, setTranslations] = useState<BibleTranslation[]>([builtInTranslation]);
-    const [activeTranslationId, setActiveTranslationId] = useState(BUILT_IN_TRANSLATION_ID);
+    const [translations, setTranslations] = useState<BibleTranslation[]>([]);
+    const [activeTranslationId, setActiveTranslationId] = useState<string | null>(null);
     const [, setTranslationStatus] = useState<string | null>(null);
     const [isImportingTranslation, setIsImportingTranslation] = useState(false);
 
@@ -371,7 +346,7 @@ export default function ControlPanel() {
         setLiveItem(null);
     }, [clearProjectorHeartbeatTimeout]);
 
-    const activeTranslation = translations.find((translation) => translation.id === activeTranslationId) ?? translations[0] ?? builtInTranslation;
+    const activeTranslation = translations.find((translation) => translation.id === activeTranslationId) ?? translations[0] ?? undefined;
     const sortedTranslations = useMemo(
         () => [...translations].sort((left, right) => {
             const shortNameCompare = left.shortName.localeCompare(right.shortName, undefined, { sensitivity: 'base' });
@@ -384,7 +359,7 @@ export default function ControlPanel() {
         [translations],
     );
     const scriptureItems = useMemo(
-        () => buildTranslationVerseItems(activeTranslation),
+        () => activeTranslation ? buildTranslationVerseItems(activeTranslation) : [],
         [activeTranslation],
     );
     const bookOptions = useMemo(() => buildBookOptions(scriptureItems), [scriptureItems]);
@@ -419,15 +394,12 @@ export default function ControlPanel() {
 
         return null;
     }, [filteredScriptureItems, liveItem, previewItem, scriptureSearchMatch]);
-    const visibleWorkspaceItems = useMemo(
-        () => filteredScriptureItems.slice(0, SCRIPTURE_WORKSPACE_LIMIT),
-        [filteredScriptureItems],
-    );
+
     const visibleScriptureRows = useMemo(
         () => buildVisibleScriptureRows(filteredScriptureItems, highlightedScriptureItem, SCRIPTURE_TABLE_LIMIT),
         [filteredScriptureItems, highlightedScriptureItem],
     );
-    const hiddenWorkspaceItemCount = Math.max(filteredScriptureItems.length - visibleWorkspaceItems.length, 0);
+
     const hiddenScriptureRowCount = Math.max(filteredScriptureItems.length - visibleScriptureRows.length, 0);
     const sessionItemIds = useMemo(() => new Set(sessionItems.map((item) => item.id)), [sessionItems]);
 
@@ -489,10 +461,7 @@ export default function ControlPanel() {
                 window.localStorage.removeItem('bible-show-translations');
                 const storedActiveTranslationId = window.localStorage.getItem(ACTIVE_TRANSLATION_STORAGE_KEY);
                 const storedTranslations = await loadStoredTranslations();
-                const mergedTranslations = [
-                    builtInTranslation,
-                    ...storedTranslations.filter((translation) => translation.id !== BUILT_IN_TRANSLATION_ID),
-                ];
+                const mergedTranslations = storedTranslations;
                 const defaultTranslationId = getDefaultTranslationId(mergedTranslations);
 
                 setTranslations(mergedTranslations);
@@ -520,8 +489,7 @@ export default function ControlPanel() {
 
         const persistTranslations = async () => {
             try {
-                const storedTranslations = translations.filter((translation) => translation.id !== BUILT_IN_TRANSLATION_ID);
-                await saveStoredTranslations(storedTranslations);
+                await saveStoredTranslations(translations);
             } catch (err) {
                 console.warn('Unable to persist imported Bible translations.', err);
                 setTranslationStatus('Unable to save imported translations in browser storage.');
@@ -536,7 +504,11 @@ export default function ControlPanel() {
             return;
         }
 
-        window.localStorage.setItem(ACTIVE_TRANSLATION_STORAGE_KEY, activeTranslationId);
+        if (activeTranslationId) {
+            window.localStorage.setItem(ACTIVE_TRANSLATION_STORAGE_KEY, activeTranslationId);
+        } else {
+            window.localStorage.removeItem(ACTIVE_TRANSLATION_STORAGE_KEY);
+        }
     }, [activeTranslationId]);
 
     useEffect(() => {
@@ -710,7 +682,7 @@ export default function ControlPanel() {
         if (!trimmedQuery) {
             setCommittedScriptureQuery('');
             lastSubmittedSearchRef.current = '';
-            setTranslationStatus(`Enter a scripture reference like John 1 or John 1:13 in ${activeTranslation.shortName}.`);
+            setTranslationStatus(`Enter a scripture reference like John 1 or John 1:13 in ${activeTranslation?.shortName ?? 'your active translation'}.`);
             return;
         }
 
@@ -728,7 +700,7 @@ export default function ControlPanel() {
         }
 
         if (!searchMatch) {
-            setTranslationStatus(`No scriptures matched "${trimmedQuery}" in ${activeTranslation.shortName}.`);
+            setTranslationStatus(`No scriptures matched "${trimmedQuery}" in ${activeTranslation?.shortName ?? 'your active translation'}.`);
             return;
         }
 
@@ -868,6 +840,7 @@ export default function ControlPanel() {
     };
 
     const downloadActiveTranslation = () => {
+        if (!activeTranslation) return;
         const fileName = activeTranslation.sourceFileName ?? `${activeTranslation.shortName || activeTranslation.name}.bib`;
         const content = serializeBibleTranslation(activeTranslation);
         const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -967,29 +940,29 @@ export default function ControlPanel() {
                     Bible Show
                 </div>
                 <div className="menu-items">
-                    <div className="menu-item">File</div>
-                    <div className="menu-item">Edit</div>
-                    <div className="menu-item">Live</div>
-                    <div className="menu-item">Profiles</div>
-                    <div className="menu-item">View</div>
-                    <div className="menu-item">Help</div>
+                    <div className="menu-item" title="Coming Soon">File</div>
+                    <div className="menu-item" title="Coming Soon">Edit</div>
+                    <div className="menu-item" title="Coming Soon">Live</div>
+                    <div className="menu-item" title="Coming Soon">Profiles</div>
+                    <div className="menu-item" title="Coming Soon">View</div>
+                    <div className="menu-item" title="Coming Soon">Help</div>
                 </div>
             </div>
 
             {/* 2. Toolbar */}
             <div className="toolbar">
                 <div className="toolbar-section">
-                    <button className="tool-btn"><FilePlus size={20} />New</button>
-                    <button className="tool-btn"><FolderOpen size={20} />Open</button>
-                    <button className="tool-btn"><Save size={20} />Save</button>
-                    <button className="tool-btn"><Store size={20} />Store</button>
-                    <button className="tool-btn"><Globe size={20} />Web</button>
+                    <button className="tool-btn" title="Coming Soon"><FilePlus size={20} />New</button>
+                    <button className="tool-btn" title="Coming Soon"><FolderOpen size={20} />Open</button>
+                    <button className="tool-btn" title="Coming Soon"><Save size={20} />Save</button>
+                    <button className="tool-btn" title="Coming Soon"><Store size={20} />Store</button>
+                    <button className="tool-btn" title="Coming Soon"><Globe size={20} />Web</button>
                 </div>
                 <div className="toolbar-section" style={{ paddingLeft: '15px' }}>
                     <button className="tool-btn go-live-btn" onClick={sendPreviewToLive} disabled={!previewItem}>
                         <Play size={24} />Go Live
                     </button>
-                    <button className="tool-btn"><Bell size={20} />Alerts</button>
+                    <button className="tool-btn" title="Coming Soon"><Bell size={20} />Alerts</button>
                 </div>
                 <div className="toolbar-section" style={{ paddingLeft: '15px' }}>
                     <button className="tool-btn" onClick={clearLiveScreen}><Image size={20} />Logo</button>
@@ -1038,7 +1011,7 @@ export default function ControlPanel() {
                                                 <div className="schedule-subpane-body translation-panel">
                                                     <div className="translation-list translation-list-compact" role="listbox" aria-label="Bible translations">
                                                         {sortedTranslations.map((translation) => {
-                                                            const isActiveTranslation = translation.id === activeTranslation.id;
+                                                            const isActiveTranslation = activeTranslation && translation.id === activeTranslation.id;
 
                                                             return (
                                                                 <button
@@ -1111,38 +1084,14 @@ export default function ControlPanel() {
                             <div className="pane">
                                 <div className="pane-header">Live Workspace</div>
                                 <div className="pane-content slides-grid">
-                                    {resTab !== 'Scriptures' && visibleWorkspaceItems.map((item) => {
-                                        const isPreviewing = previewItem?.id === item.id;
-                                        const isLive = liveItem?.id === item.id && !isLiveOffline;
 
-                                        return (
-                                            <div
-                                                key={item.id}
-                                                className={`slide-card ${isPreviewing ? 'previewing' : ''} ${isLive ? 'live-now' : ''}`}
-                                                onClick={() => (committedScriptureQuery ? void sendItemToLive(item) : sendToPreview(item))}
-                                                onDoubleClick={() => sendItemToLive(item)}
-                                                tabIndex={0}
-                                                onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter') void sendItemToLive(item); }}
-                                            >
-                                                {isLive && <div className="slide-badge badge-live">Live</div>}
-                                                {!isLive && isPreviewing && <div className="slide-badge badge-preview">Preview</div>}
-
-                                                <div className="slide-text">"{item.text}"</div>
-                                                <div style={{ color: '#888', fontSize: '10px', marginTop: '10px' }}>{formatSlideReference(item)}</div>
-                                            </div>
-                                        );
-                                    })}
-                                    {resTab !== 'Scriptures' && hiddenWorkspaceItemCount > 0 && (
+                                    {(resTab === 'Scriptures' || true) && (
                                         <div className="slide-card slide-card-info">
                                             <div className="slide-text">
-                                                Showing the first {visibleWorkspaceItems.length} verses. Search to narrow the remaining {hiddenWorkspaceItemCount} results.
-                                            </div>
-                                        </div>
-                                    )}
-                                    {resTab === 'Scriptures' && (
-                                        <div className="slide-card slide-card-info">
-                                            <div className="slide-text">
-                                                Live Workspace is reserved for songs, media, and presentations. Add scriptures to Schedule using the add button below.
+                                                <div style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '8px', color: '#888' }}>Coming Soon</div>
+                                                Live Workspace will display slides for songs, media, and presentations.
+                                                <br /><br />
+                                                Add scriptures to the Schedule using the "Add" button in the Resource area (bottom) to use them.
                                             </div>
                                         </div>
                                     )}
@@ -1210,7 +1159,7 @@ export default function ControlPanel() {
                                     <div className="collection-search">
                                         <input
                                             type="text"
-                                            placeholder={resTab === 'Scriptures' ? `Search ${activeTranslation.shortName}...` : 'Search...'}
+                                            placeholder={resTab === 'Scriptures' ? (activeTranslation ? `Search ${activeTranslation.shortName}...` : 'Search (No translation)...') : 'Search...'}
                                             value={searchQuery}
                                             onChange={(event) => setSearchQuery(event.target.value)}
                                             onKeyDown={(event) => {
@@ -1325,7 +1274,7 @@ export default function ControlPanel() {
                                         }}
                                     >
                                         <div className="datagrid-cell" style={{ fontWeight: 'bold' }}>{verse.ref}</div>
-                                        <div className="datagrid-cell">{verse.translationShortName ?? activeTranslation.shortName}</div>
+                                        <div className="datagrid-cell">{verse.translationShortName ?? activeTranslation?.shortName ?? ''}</div>
                                         <div className="datagrid-cell">{verse.text.substring(0, 90)}...</div>
                                         <div className="datagrid-cell datagrid-cell-action">
                                             <button
@@ -1351,7 +1300,7 @@ export default function ControlPanel() {
 
                                 {resTab === 'Scriptures' && committedScriptureQuery && filteredScriptureItems.length === 0 && (
                                     <div style={{ color: '#666', padding: '15px', fontSize: '12px', textAlign: 'center' }}>
-                                        No scriptures matched your search in {activeTranslation.name}.
+                                        No scriptures matched your search in {activeTranslation?.name ?? 'your active translation'}.
                                     </div>
                                 )}
 
@@ -1363,6 +1312,7 @@ export default function ControlPanel() {
 
                                 {resTab !== 'Songs' && resTab !== 'Scriptures' && (
                                     <div style={{ color: '#666', padding: '15px', fontSize: '12px', textAlign: 'center' }}>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '8px', color: '#888' }}>Coming Soon</div>
                                         No items found in {resTab}
                                     </div>
                                 )}
@@ -1372,18 +1322,16 @@ export default function ControlPanel() {
                             <div className="res-preview-pane">
                                 <div className="res-preview-image">
                                     <div className="res-preview-text">
-                                        {previewItem ? previewItem.text : (
-                                            resTab === 'Songs' ? "Bless the Lord O my soul\nO my soul\nWorship His holy name" : "Select an item to preview"
-                                        )}
+                                        {previewItem ? previewItem.text : "Select an item to preview"}
                                     </div>
                                 </div>
                                 <div className="res-preview-footer">
                                     <span>
                                         {resTab === 'Scriptures'
                                             ? committedScriptureQuery
-                                                ? `${filteredScriptureItems.length} verses in ${activeTranslation.shortName}`
-                                                : `Waiting for a scripture search in ${activeTranslation.shortName}`
-                                            : `1 of 230 ${resTab.toLowerCase()}`}
+                                                ? `${filteredScriptureItems.length} verses in ${activeTranslation?.shortName ?? ''}`
+                                                : `Waiting for a scripture search in ${activeTranslation?.shortName ?? ''}`
+                                            : `0 of 0 ${resTab.toLowerCase()}`}
                                     </span>
                                     <span><ListPlus size={14} /> Options</span>
                                 </div>
